@@ -63,3 +63,7 @@ hermes skills update       # pull the latest skill
 Notes: the footer needs `nvhermes` (Hermes plugins can't modify the status
 bar); plain `hermes` still gets `/nvusage`. Router stats are in-memory —
 they reset with the router. Streaming responses carry no token usage.
+
+# Changelog
+
+- 0.1.0 — initial release: footer (row/bar/min/off), /nvusage, /nvfooter, self-setup skill
