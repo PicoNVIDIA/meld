@@ -128,7 +128,9 @@ def register(ctx):
         check(True, "plugin loaded (/switchyard registered)")
         session_url = _session_base_url()
         root = _find_root()
-        routed = bool(session_url) and swc.detect(session_url) is not None
+        routed = (ref is not None and getattr(ref, "_sw_active", False)) or (
+            bool(session_url) and swc.detect(session_url) is not None
+        )
         check(root is not None, f"switchyard reachable ({root or 'none found'})")
         if root:
             check(swc.health_ok(root), f"health ok at {root}/health")
