@@ -22,7 +22,8 @@ OPENROUTER_BASE_URL=http://127.0.0.1:<port>/v1 OPENROUTER_API_KEY=dummy \
   nvhermes --provider openrouter -m <route-id>
 ```
 
-(Or set `model.base_url` in `~/.hermes/config.yaml` to route every session.)
+(To route every session by default, configure your model endpoint through
+Hermes's own model settings — your call, nothing here changes it for you.)
 
 Any agent that can run shell commands can perform the setup — point it at
 [`skill/SKILL.md`](skill/SKILL.md) (agentskills.io format).

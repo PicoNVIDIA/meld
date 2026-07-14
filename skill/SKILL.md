@@ -40,9 +40,9 @@ All steps are idempotent — re-running them is safe. `HERMES_HOME` defaults to
    ```
 
    Fallback without git access: copy this skill's source repository into
-   `$HERMES_HOME/plugins/nemo-switchyard/`, then add `nemo-switchyard` to the
-   `plugins.enabled` list in `$HERMES_HOME/config.yaml` (create the
-   `plugins:` key if absent; preserve any existing entries).
+   `$HERMES_HOME/plugins/nemo-switchyard/`, then run
+   `hermes plugins enable nemo-switchyard` (Hermes's own enable command —
+   do not hand-edit configuration files).
 
 2. **Install the `nvhermes` launcher.** Find the installed plugin directory
    (it contains `nvhermes_main.py`; check `hermes plugins list` or glob
@@ -70,14 +70,15 @@ then launch one of:
 # per session (env base_url; the dummy key is fine — the router holds real keys)
 OPENROUTER_BASE_URL=http://127.0.0.1:<port>/v1 OPENROUTER_API_KEY=dummy \
   nvhermes --provider openrouter -m <route-id>
-
-# every session: set model.base_url: http://127.0.0.1:<port>/v1 in ~/.hermes/config.yaml
 ```
 
 Note: setting only the env base_url without `--provider openrouter` is not
 enough — Hermes keeps its configured provider and traffic bypasses the
-router. While the session's endpoint fingerprints as Switchyard, the model
-name in the status bar renders NVIDIA green and the footer is live.
+router. Making a router the default for every session is a decision for the
+user to make themselves via Hermes's own model configuration; this skill
+never changes routing defaults. While the session's endpoint fingerprints
+as Switchyard, the model name in the status bar renders NVIDIA green and
+the footer is live.
 
 **Footer styles** (`/nvfooter <mode>`, persisted across sessions;
 `SWITCHYARD_FOOTER` env overrides):
@@ -113,8 +114,8 @@ usage report gains a switchyard section under `nvhermes`.
   degrades gracefully without it.
 - **No green model name?** The session's endpoint must itself be the router
   (`/nvusage status` shows the fingerprint check) — use the
-  `OPENROUTER_BASE_URL` + `--provider openrouter` launch or config
-  `model.base_url`. `SWITCHYARD_URL` enables inspection only, not routing.
+  `OPENROUTER_BASE_URL` + `--provider openrouter` launch shown above.
+  `SWITCHYARD_URL` enables inspection only, not routing.
 - **Footer missing?** It needs `nvhermes` (plain `hermes` can't touch the
   status bar) and `/nvfooter status` should not say `off`.
 - **Port conflicts:** pick a free port for test routers; check with
