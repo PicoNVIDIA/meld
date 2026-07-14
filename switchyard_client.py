@@ -78,6 +78,31 @@ def resolve_url(session_base_url=None):
     return None
 
 
+def routes(root, timeout=1.0):
+    """Configured routes only (not the passthrough catalog).
+
+    Returns (routes, default_id): routes is a list of
+    {id, profile, context_window} for /v1/models entries whose
+    switchyard.profile is not 'passthrough'.
+    """
+    models = _get_json(root + "/v1/models", timeout=timeout)
+    if not isinstance(models, dict):
+        return [], None
+    out = []
+    for entry in models.get("data") or []:
+        if not isinstance(entry, dict) or entry.get("owned_by") != "switchyard":
+            continue
+        meta = entry.get("switchyard") or {}
+        if meta.get("profile") == "passthrough":
+            continue
+        out.append({
+            "id": entry.get("id"),
+            "profile": meta.get("profile") or "?",
+            "context_window": (entry.get("capabilities") or {}).get("context_window"),
+        })
+    return out, models.get("default_model")
+
+
 def stats(root, timeout=0.5):
     return _get_json(root + "/v1/routing/stats", timeout=timeout)
 

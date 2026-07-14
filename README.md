@@ -13,17 +13,38 @@ hermes skills install PicoNVIDIA/meld/nemo-switchyard --category mlops   # the s
 # then tell your agent: "set up the switchyard integration"
 ```
 
-Or install directly:
+Or install directly, then let `/switchyard` do the rest from inside a session:
 
 ```bash
 hermes plugins install PicoNVIDIA/meld --enable
 # copy nvhermes.launcher to ~/.local/bin/nvhermes && chmod +x it
-OPENROUTER_BASE_URL=http://127.0.0.1:<port>/v1 OPENROUTER_API_KEY=dummy \
-  nvhermes --provider openrouter -m <route-id>
+nvhermes
 ```
 
-(To route every session by default, configure your model endpoint through
-Hermes's own model settings — your call, nothing here changes it for you.)
+```
+/switchyard init        # build a router config — weak=nemotron ultra, strong=opus 4.8
+/switchyard start       # run a local router with it (needs $NVIDIA_API_KEY exported)
+/switchyard connect     # register it as a hermes provider → shows in /model
+```
+
+then relaunch routed: `nvhermes --provider switchyard -m auto`. The `/model`
+picker lists the routes under **Switchyard**, `/model weak` / `/model strong`
+switch instantly, and `/switchyard disconnect` undoes the provider entry.
+(Per-session env alternative, no provider entry:
+`OPENROUTER_BASE_URL=http://127.0.0.1:<port>/v1 OPENROUTER_API_KEY=dummy
+nvhermes --provider openrouter -m auto`.)
+
+## The /switchyard hub
+
+```
+/switchyard                control panel: router, managed process, footer, routes, session totals
+/switchyard init [k=v]     config builder (strong= weak= classifier= base_url= key_env= port= …)
+/switchyard start|stop     manage a local router process
+/switchyard connect [url]  add the provider entry (marker-bounded; disconnect removes it)
+/switchyard routes|use     list routes / switch this session
+/switchyard footer [m]     cycle or set footer style
+/switchyard usage|status   usage report / PASS-FAIL health checks
+```
 
 Any agent that can run shell commands can perform the setup — point it at
 [`nemo-switchyard/SKILL.md`](nemo-switchyard/SKILL.md) (agentskills.io format).
@@ -67,3 +88,4 @@ they reset with the router. Streaming responses carry no token usage.
 # Changelog
 
 - 0.1.0 — initial release: footer (row/bar/min/off), /nvusage, /nvfooter, self-setup skill
+- 0.2.0 — /switchyard hub: control panel, config builder (init), router start/stop, provider connect (routes in /model picker), route switching

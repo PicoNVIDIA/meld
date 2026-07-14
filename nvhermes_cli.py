@@ -44,9 +44,19 @@ class SwitchyardCLI(HermesCLI):
         # OPENROUTER_BASE_URL) or via a provider profile's env base_url.
         import os as _os
 
+        provider_base_url = None
+        try:
+            import cli as _cli_mod
+            prov = getattr(self, "requested_provider", None) or getattr(self, "provider", "")
+            pcfg = (_cli_mod.CLI_CONFIG.get("providers") or {}).get(prov) or {}
+            provider_base_url = pcfg.get("base_url") or pcfg.get("api") or pcfg.get("url")
+        except Exception:
+            pass
+
         self._sw_url = None
         for cand in (
             getattr(self, "base_url", None),
+            provider_base_url,
             _os.environ.get("OPENAI_BASE_URL"),
             _os.environ.get("OPENROUTER_BASE_URL"),
         ):
@@ -214,6 +224,61 @@ class SwitchyardCLI(HermesCLI):
         if not st:
             return ""
         return f"⏚ {st.get('total_requests', 0)}req {swc.fmt_cost(swc.total_cost(st))}"
+
+    # ── /model integration ─────────────────────────────────────────────────
+    def _sw_switch_route(self, route):
+        """Switch this session to a Switchyard route (same endpoint, new model id)."""
+        if not self._sw_active:
+            return "not routed through switchyard — see /switchyard status"
+        rts, _default = swc.routes(self._sw_url)
+        ids = [rt["id"] for rt in rts]
+        if route not in ids:
+            return f"unknown route {route!r} — available: {', '.join(ids) or 'none'}"
+        old = self.model
+        if self.agent is not None:
+            try:
+                self.agent.switch_model(
+                    new_model=route,
+                    new_provider=self.provider,
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                    api_mode=self.api_mode,
+                )
+            except Exception as exc:
+                return f"switch failed ({exc}); staying on {old}"
+        self.model = route
+        self._pending_model_switch_note = (
+            f"[Note: switchyard route was switched from {old} to {route}. "
+            f"The router decides which upstream model serves each request.]"
+        )
+        try:
+            self._invalidate()
+        except Exception:
+            pass
+        return f"✓ route → {route}  (was {old})"
+
+    def _handle_model_switch(self, cmd_original):
+        """/model with a Switchyard route id switches in-place; bare /model
+        lists routes above the stock picker. Everything else → stock path."""
+        if self._sw_active:
+            try:
+                parts = cmd_original.split(None, 1)
+                raw = parts[1].strip() if len(parts) > 1 else ""
+                rts, default = swc.routes(self._sw_url)
+                ids = [rt["id"] for rt in rts]
+                if raw and not raw.startswith("-") and raw.split()[0] in ids:
+                    print("  " + self._sw_switch_route(raw.split()[0]))
+                    return
+                if not raw and ids:
+                    current = self.model
+                    marks = ", ".join(
+                        ("▶ " if rt == current else "") + rt + (" (default)" if rt == default else "")
+                        for rt in ids)
+                    print(f"  ⏚ switchyard routes: {marks}")
+                    print("    switch with /model <route> — provider picker below")
+            except Exception:
+                pass
+        return super()._handle_model_switch(cmd_original)
 
     # ── native /usage section ──────────────────────────────────────────────
     def _show_usage(self):
