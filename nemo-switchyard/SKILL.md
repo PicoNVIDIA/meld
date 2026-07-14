@@ -1,7 +1,7 @@
 ---
 name: nemo-switchyard
 description: "Set up and use the NeMo Switchyard integration for Hermes Agent: install the plugin and nvhermes launcher, then read live routing usage via the footer, /nvusage, and /usage."
-version: 0.2.0
+version: 0.2.1
 author: PicoNVIDIA
 license: MIT
 platforms: [linux, macos]
@@ -34,10 +34,16 @@ routing visible inside Hermes:
 
 ## Setup procedure (for the agent)
 
-All steps are idempotent — re-running them is safe. `HERMES_HOME` defaults to
-`~/.hermes`; respect it if set.
+You do the whole setup; the user answers a few questions. All steps are
+idempotent — re-running them is safe. `HERMES_HOME` defaults to `~/.hermes`;
+respect it if set. `<plugin-dir>` below means the installed plugin directory
+(glob `$HERMES_HOME/plugins/*/nvhermes_main.py` or check
+`hermes plugins list`). Never ask the user to paste an API key into chat —
+keys stay in environment variables.
 
-1. **Install and enable the plugin** (this also brings the wrapper code):
+**Phase 1 — install (no questions needed):**
+
+1. Install and enable the plugin:
 
    ```
    hermes plugins install PicoNVIDIA/meld --enable
@@ -48,21 +54,61 @@ All steps are idempotent — re-running them is safe. `HERMES_HOME` defaults to
    `hermes plugins enable nemo-switchyard` (Hermes's own enable command —
    do not hand-edit configuration files).
 
-2. **Install the `nvhermes` launcher.** Find the installed plugin directory
-   (it contains `nvhermes_main.py`; check `hermes plugins list` or glob
-   `$HERMES_HOME/plugins/*/nvhermes_main.py`), then copy
-   `<plugin-dir>/nvhermes.launcher` to `~/.local/bin/nvhermes` and make it
-   executable with `chmod +x ~/.local/bin/nvhermes`. Confirm `~/.local/bin`
-   is on the user's PATH.
+2. Install the launcher: copy `<plugin-dir>/nvhermes.launcher` to
+   `~/.local/bin/nvhermes`, `chmod +x` it, and confirm `~/.local/bin` is on
+   the user's PATH.
 
-3. **Verify.** Run `<plugin-dir>/scripts/doctor.sh` — every required line
-   must be PASS (router lines are skipped when no router is running).
-   In a Hermes session, `/nvusage status` shows the same checklist.
+**Phase 2 — interview the user.** Ask these (offer the defaults so "just
+use defaults" is a valid answer):
 
-4. **Report to the user**, briefly: what was installed; launch with
-   `nvhermes` (plain `hermes` is untouched); how to point a session at a
-   router (see "Point Hermes at Switchyard" below); switch footer styles
-   with `/nvfooter row|bar|min|off`; see usage with `/nvusage` or `/usage`.
+- Do you already have a Switchyard router running? If yes, ask for its URL
+  and skip to phase 4.
+- Which model should be the **strong** tier and which the **weak** tier?
+  Defaults: strong `aws/anthropic/bedrock-claude-opus-4-8` (format
+  `anthropic`), weak `nvidia/nvidia/nemotron-3-ultra` (format `openai`).
+- Which inference endpoint and which **environment variable** holds its API
+  key? Defaults: `https://inference-api.nvidia.com/v1` and `NVIDIA_API_KEY`.
+  Verify it is available: `test -n "$NVIDIA_API_KEY"` (agent shells are often
+  env-scrubbed, so also check for a `NVIDIA_API_KEY=` line in
+  `$HERMES_HOME/.env` — `sw_config.py start` reads that file as a fallback).
+  If it is in neither place, ask the user to add it to `~/.hermes/.env`
+  (chmod 600) or export it, and pause until they confirm. Never ask for the
+  key value in chat and never write it to any file yourself.
+- Which port for the local router? Default `4100`. Verify it is free:
+  `lsof -nP -iTCP:<port> -sTCP:LISTEN` must return nothing.
+- Where is the `switchyard` executable? Auto-detect first
+  (`command -v switchyard`, `$SWITCHYARD_BIN`); only ask if not found.
+- Register the router as a Hermes provider so routes show in `/model`?
+  Default yes. Explain: this adds one marker-bounded entry to their Hermes
+  provider list, removable with
+  `python3 <plugin-dir>/sw_config.py disconnect`.
+
+**Phase 3 — build and start the router** (sw_config.py mirrors the
+/switchyard slash commands for shell use):
+
+```
+python3 <plugin-dir>/sw_config.py init strong=<model> weak=<model> \
+    base_url=<endpoint> key_env=<VAR> port=<port>     # omit k=v pairs to keep defaults
+python3 <plugin-dir>/sw_config.py start [bin=<path-to-switchyard>]
+```
+
+Poll `curl -fsS http://127.0.0.1:<port>/health` until it returns
+`{"status":"ok"}` (typically ~15 s — the router fetches the upstream
+catalog first; check `~/.hermes/switchyard/router.log` if it takes longer).
+
+**Phase 4 — connect and verify:**
+
+```
+python3 <plugin-dir>/sw_config.py connect http://127.0.0.1:<port>/v1   # if the user said yes
+SWITCHYARD_URL=http://127.0.0.1:<port> <plugin-dir>/scripts/doctor.sh  # every required line PASS
+```
+
+**Phase 5 — hand off.** Tell the user, briefly: what was installed and
+started; launch a routed session with
+`nvhermes --provider switchyard -m auto` (plain `hermes` is untouched);
+routes appear in `/model`; `/switchyard` is the control panel;
+`/switchyard footer` cycles footer styles; `/switchyard usage` or `/usage`
+show routing stats. Offer to answer questions about the footer legend.
 
 ## Using it
 

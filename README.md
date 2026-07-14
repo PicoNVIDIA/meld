@@ -89,3 +89,4 @@ they reset with the router. Streaming responses carry no token usage.
 
 - 0.1.0 — initial release: footer (row/bar/min/off), /nvusage, /nvfooter, self-setup skill
 - 0.2.0 — /switchyard hub: control panel, config builder (init), router start/stop, provider connect (routes in /model picker), route switching
+- 0.2.1 — agent-driven setup: sw_config.py shell CLI (init/start/stop/connect/disconnect/status), interview-style SKILL.md, key fallback to ~/.hermes/.env for env-scrubbed agent shells

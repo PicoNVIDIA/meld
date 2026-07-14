@@ -213,7 +213,16 @@ def disconnect_provider(config_path=None):
 # ---------------------------------------------------------------------------
 
 def find_switchyard_bin(settings=None):
-    """settings['switchyard_bin'] > $SWITCHYARD_BIN > PATH lookup."""
+    """settings['switchyard_bin'] > $SWITCHYARD_BIN > PATH lookup.
+
+    With settings=None, falls back to the plugin's own settings.json (so the
+    shell CLI honors a bin saved via /switchyard bin).
+    """
+    if settings is None:
+        try:
+            settings = json.loads((Path(__file__).resolve().parent / "settings.json").read_text())
+        except Exception:
+            settings = {}
     for cand in (
         (settings or {}).get("switchyard_bin"),
         os.environ.get("SWITCHYARD_BIN"),
@@ -253,18 +262,45 @@ def router_state():
     return state
 
 
+def _key_from_hermes_env_file(key_env):
+    """Read KEY=value from $HERMES_HOME/.env (hermes's own env file).
+
+    Agent terminal sessions run with a scrubbed environment, so the exported
+    var may be invisible here even when the user has it set. The .env file is
+    the sanctioned durable location; we only read it, never write it.
+    """
+    env_file = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / ".env"
+    try:
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            if k.strip().removeprefix("export ").strip() == key_env:
+                return v.strip().strip("\"'") or None
+    except Exception:
+        pass
+    return None
+
+
 def start_router(bin_path, config_path, port, key_env):
     """Spawn `switchyard --routing-profiles <cfg> -- serve` detached.
 
-    Returns (ok, message). Refuses when the key env var is unset (the YAML
-    references it) or a managed router is already running.
+    Returns (ok, message). The key env var must be set in this environment or
+    present in $HERMES_HOME/.env (agent shells are env-scrubbed); it is passed
+    to the router process only, never written anywhere.
     """
     state = router_state()
     if state and state.get("running"):
         return False, f"router already running (pid {state['pid']}, port {state['port']}) — /switchyard stop first"
-    if key_env and not os.environ.get(key_env):
-        return False, (f"{key_env} is not set in this environment — export it in the shell "
-                       f"that runs hermes, then retry (the router reads it at start)")
+    child_env = dict(os.environ)
+    if key_env and not child_env.get(key_env):
+        from_file = _key_from_hermes_env_file(key_env)
+        if from_file:
+            child_env[key_env] = from_file
+        else:
+            return False, (f"{key_env} is not set here and not in $HERMES_HOME/.env — "
+                           f"add `{key_env}=<value>` to ~/.hermes/.env (chmod 600) or export it, then retry")
     SW_DIR.mkdir(parents=True, exist_ok=True)
     log = open(LOG_PATH, "a")
     try:
@@ -272,7 +308,7 @@ def start_router(bin_path, config_path, port, key_env):
             [bin_path, "--routing-profiles", str(config_path), "--",
              "serve", "--host", "127.0.0.1", "--port", str(port)],
             stdout=log, stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL, start_new_session=True,
+            stdin=subprocess.DEVNULL, start_new_session=True, env=child_env,
         )
     except Exception as exc:
         return False, f"failed to start router: {exc}"
@@ -298,3 +334,87 @@ def stop_router():
         time.sleep(0.1)
     alive = _pid_alive(state["pid"])
     return (not alive), ("router stopped" if not alive else f"SIGTERM sent to pid {state['pid']} (still shutting down)")
+
+
+# ---------------------------------------------------------------------------
+# CLI — lets agents (and humans) drive setup from the shell:
+#   python3 sw_config.py init [key=value ...]
+#   python3 sw_config.py start [bin=PATH] [config=PATH] [port=N]
+#   python3 sw_config.py stop | status | connect [URL] | disconnect
+# Mirrors the /switchyard slash commands 1:1.
+# ---------------------------------------------------------------------------
+
+def _cli(argv):
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+    cmd = argv[0] if argv else "help"
+    rest = argv[1:]
+
+    if cmd == "init":
+        opts, unknown = parse_kv(" ".join(rest))
+        if unknown:
+            return 1, "unrecognized: " + " ".join(unknown) + "\nknown keys: " + " ".join(sorted(KNOWN_KEYS))
+        path = write_config(opts)
+        return 0, (f"wrote {path}\nroutes: auto (classifier {opts['classifier']}), "
+                   f"strong ({opts['strong']}), weak ({opts['weak']})\n"
+                   f"api key: read from ${opts['key_env']} at router start")
+
+    if cmd == "start":
+        kv = dict(tok.split("=", 1) for tok in rest if "=" in tok)
+        bin_path = kv.get("bin") or find_switchyard_bin()
+        if not bin_path:
+            return 1, "switchyard executable not found — pass bin=PATH or export SWITCHYARD_BIN"
+        cfg = Path(kv.get("config") or CONFIG_PATH)
+        if not cfg.exists():
+            return 1, f"no config at {cfg} — run: python3 sw_config.py init"
+        key_env = DEFAULTS["key_env"]
+        try:
+            import re as _re
+            m = _re.search(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", cfg.read_text())
+            if m:
+                key_env = m.group(1)
+        except Exception:
+            pass
+        ok, msg = start_router(bin_path, cfg, kv.get("port") or DEFAULTS["port"], key_env)
+        return (0 if ok else 1), msg
+
+    if cmd == "stop":
+        ok, msg = stop_router()
+        return (0 if ok else 1), msg
+
+    if cmd == "status":
+        state = router_state()
+        payload = {"managed_router": state, "config": str(CONFIG_PATH),
+                   "config_exists": CONFIG_PATH.exists(),
+                   "switchyard_bin": find_switchyard_bin()}
+        return 0, json.dumps(payload, indent=2)
+
+    if cmd == "connect":
+        import switchyard_client as swc
+        url = rest[0] if rest else None
+        if not url:
+            state = router_state()
+            if state and state.get("running"):
+                url = f"http://127.0.0.1:{state['port']}/v1"
+        if not url:
+            return 1, "no url given and no managed router running — connect URL"
+        root = swc.detect(url, timeout=2.0)
+        if root is None:
+            return 1, f"{url} does not fingerprint as a switchyard router (still booting? ~15s)"
+        rts, _default = swc.routes(root)
+        ok, msg = connect_provider(root + "/v1", [rt["id"] for rt in rts])
+        return (0 if ok else 1), msg + f"\nprovider switchyard → {root}/v1 (routes: " + ", ".join(rt["id"] for rt in rts) + ")"
+
+    if cmd == "disconnect":
+        ok, msg = disconnect_provider()
+        return (0 if ok else 1), msg
+
+    return 1, ("usage: sw_config.py init [k=v ...] | start [bin= config= port=] | stop | "
+               "status | connect [URL] | disconnect")
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _code, _msg = _cli(_sys.argv[1:])
+    print(_msg)
+    _sys.exit(_code)
