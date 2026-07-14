@@ -23,10 +23,19 @@ hermes
 ```
 
 ```
-/switchyard init        # build a router config — weak=nemotron ultra, strong=opus 4.8
-/switchyard start       # run a local router with it (needs $NVIDIA_API_KEY exported)
+/switchyard build       # interactive: pick strong/weak tiers from your connected models
+                        # (or /switchyard init for the non-interactive defaults:
+                        #  weak=nemotron ultra, strong=opus 4.8)
+/switchyard start       # run a local router with it (key env vars must be available)
 /switchyard connect     # register it as a hermes provider → shows in /model
 ```
+
+`/switchyard build` walks you through Hermes's native model picker twice —
+strong tier, then weak — listing only connected providers Switchyard can call
+directly (API-key based; OAuth providers are skipped with a note). Each pick
+is translated into a Switchyard target automatically: endpoint URL, key env
+var, and wire format come from your Hermes provider config, so mixing (say)
+an NVIDIA NIM strong tier with an OpenRouter weak tier just works.
 
 then relaunch routed: `hermes --provider switchyard -m switchyard`, or just
 pick `switchyard` in `/model` once (Hermes persists it) — one model named
@@ -41,7 +50,8 @@ hermes --provider openrouter -m switchyard`.)
 
 ```
 /switchyard                control panel: router, managed process, footer, routes, session totals
-/switchyard init [k=v]     config builder (strong= weak= classifier= base_url= key_env= port= …)
+/switchyard build [k=v]    interactive tier picker over your connected models
+/switchyard init [k=v]     non-interactive config (strong= weak= classifier= base_url= key_env= port= …)
 /switchyard start|stop     manage a local router process
 /switchyard connect [url]  add the provider entry (marker-bounded; disconnect removes it)
 /switchyard routes|use     list routes / switch this session
@@ -97,3 +107,4 @@ responses carry no token usage.
 - 0.2.1 — agent-driven setup: sw_config.py shell CLI (init/start/stop/connect/disconnect/status), interview-style SKILL.md, key fallback to ~/.hermes/.env for env-scrubbed agent shells
 - 0.3.0 — one model ("switchyard") instead of auto/strong/weak; footer grafted into plain hermes at plugin load (nvhermes wrapper now optional)
 - 0.3.1 — UX gated on the selected /model being a switchyard route, re-checked live: pin a catalog model or switch providers and the TUI is stock again; /model switchyard brings it back
+- 0.4.0 — /switchyard build: interactive tier picker over your connected Hermes providers (native /model picker UI); per-tier endpoints/keys/formats in the generated config; multi-key router start

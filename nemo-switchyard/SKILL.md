@@ -1,7 +1,7 @@
 ---
 name: nemo-switchyard
 description: "Set up and use the NeMo Switchyard integration for Hermes Agent: install the plugin and nvhermes launcher, then read live routing usage via the footer, /nvusage, and /usage."
-version: 0.3.1
+version: 0.4.0
 author: PicoNVIDIA
 license: MIT
 platforms: [linux, macos]
@@ -120,9 +120,12 @@ show routing stats.
 **The easy path — all inside a session:**
 
 ```
-/switchyard init          # writes ~/.hermes/switchyard/routes.yaml
-                          # one model "switchyard": weak=nemotron ultra, strong=opus 4.8, nano classifier
-/switchyard start         # runs a local router with it ($NVIDIA_API_KEY must be exported)
+/switchyard build         # interactive: pick strong/weak tiers from your connected
+                          # models via the native picker (endpoints/keys/formats
+                          # are derived from your Hermes provider config)
+/switchyard init          # or non-interactive defaults: weak=nemotron ultra,
+                          # strong=opus 4.8, nano classifier
+/switchyard start         # runs a local router with it (key env vars must be available)
 /switchyard connect       # registers provider "switchyard" so /model lists it
 ```
 

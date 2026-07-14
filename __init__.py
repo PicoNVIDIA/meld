@@ -29,7 +29,8 @@ _NOT_FOUND_HINT = (
 
 _HELP = """\
 /switchyard                control panel (this overview)
-/switchyard init [k=v]     build a router config — defaults: weak=nemotron ultra, strong=opus 4.8
+/switchyard build [k=v]    interactive builder — pick strong/weak tiers from your connected models
+/switchyard init [k=v]     non-interactive config — defaults: weak=nemotron ultra, strong=opus 4.8
 /switchyard start|stop     run/stop a local router with that config
 /switchyard connect [url]  register the router as a hermes provider (shows in /model picker)
 /switchyard disconnect     remove that provider entry again
@@ -308,6 +309,12 @@ def register(ctx):
             return _use(rest)
         if cmd == "footer":
             return _footer(rest.lower())
+        if cmd == "build":
+            ref = _cli_ref()
+            fn = getattr(ref, "_sw_start_builder", None) if ref is not None else None
+            if fn is None:
+                return "the interactive builder needs a TUI session with the plugin loaded"
+            return fn(rest)
         if cmd == "init":
             return _init(rest)
         if cmd == "connect":

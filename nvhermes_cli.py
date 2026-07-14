@@ -332,6 +332,169 @@ def _sw_model_switch_preamble(self, cmd_original):
     return False
 
 
+# ── /switchyard build — interactive wizard over the native model picker ────
+#
+# Reuses Hermes's own /model picker modal twice (strong tier, then weak),
+# listing only connected providers that Switchyard can call directly (a
+# resolvable base_url + an API-key env var — OAuth-only providers are
+# skipped). Each pick is translated into a Switchyard target automatically.
+
+def _sw_provider_endpoint(self, slug, user_provs=None, custom_provs=None):
+    """(base_url, key_env) for a Hermes provider slug, or (None, None)."""
+    if slug in ("copilot", "github-copilot"):  # token-exchange auth — not a plain bearer key
+        return None, None
+    try:
+        from hermes_cli.providers import resolve_provider_full
+        pdef = resolve_provider_full(slug, user_provs, custom_provs)
+        if pdef is not None and getattr(pdef, "base_url", ""):
+            if getattr(pdef, "auth_type", "api_key") != "api_key":
+                return None, None
+            envs = list(getattr(pdef, "api_key_env_vars", ()) or ())
+            if envs:
+                return pdef.base_url, envs[0]
+    except Exception:
+        pass
+    return None, None
+
+
+def _sw_infer_format(slug, base_url, model):
+    """Wire format for a tier target. Aggregators speak openai; native
+    anthropic endpoints (and claude models on custom gateways) speak anthropic."""
+    slug = (slug or "").lower()
+    model = (model or "").lower()
+    if slug in ("openrouter", "openai", "nvidia", "nous"):
+        return "openai"
+    if slug == "anthropic":
+        return "anthropic"
+    if "anthropic" in (base_url or "").lower():
+        return "anthropic"
+    if "claude" in model and slug not in ("openrouter",):
+        return "anthropic"
+    return "openai"
+
+
+def _sw_builder_providers(self):
+    """Connected providers usable as Switchyard targets, in picker-row shape."""
+    from hermes_cli.inventory import build_models_payload, load_picker_context
+
+    ctx = load_picker_context().with_overrides(
+        current_provider=self.provider or "",
+        current_model=self.model or "",
+        current_base_url=self.base_url or "",
+    )
+    payload = build_models_payload(ctx, include_unconfigured=False, picker_hints=True)
+    rows, skipped = [], []
+    for row in payload.get("providers") or []:
+        slug = row.get("slug") or ""
+        if slug == "switchyard":
+            continue
+        base_url, key_env = _sw_provider_endpoint(
+            self, slug, ctx.user_providers, ctx.custom_providers)
+        if base_url and key_env:
+            row = dict(row)
+            row["is_current"] = False
+            rows.append(row)
+        else:
+            skipped.append(slug)
+    return rows, skipped, ctx
+
+
+def _sw_start_builder(self, raw_args=""):
+    import sw_config
+    opts, unknown = sw_config.parse_kv(raw_args)
+    if unknown:
+        return "unrecognized: " + " ".join(unknown) + " — usage: /switchyard build [port=N ...]"
+    try:
+        rows, skipped, ctx = _sw_builder_providers(self)
+    except Exception as exc:
+        return f"could not list connected providers: {exc}"
+    if not rows:
+        return ("no connected providers usable as switchyard targets — "
+                "switchyard needs providers with a base_url and an API-key env var "
+                f"(skipped: {', '.join(skipped) or 'none'})")
+    self._sw_builder = {"step": "strong", "opts": opts, "rows": rows,
+                        "ctx": ctx, "picking": False, "picks": {}}
+    note = f"  (skipped, no direct API key: {', '.join(skipped)})\n" if skipped else ""
+    _sw_builder_open_picker(self)
+    return (f"⏚ switchyard build — pick the STRONG tier model (hard requests)\n{note}"
+            "  use ↑/↓ + Enter in the picker; Cancel aborts the build")
+
+
+def _sw_builder_open_picker(self):
+    b = self._sw_builder
+    b["picking"] = True
+    label = "STRONG tier" if b["step"] == "strong" else "WEAK tier"
+    self._open_model_picker(
+        [dict(r) for r in b["rows"]],
+        f"picking the {label}",
+        "switchyard build",
+        user_provs=getattr(b["ctx"], "user_providers", None),
+        custom_provs=getattr(b["ctx"], "custom_providers", None),
+    )
+
+
+def _sw_builder_capture(self, provider_data, chosen_model):
+    """A model was picked inside the wizard. Advance or finish."""
+    b = self._sw_builder
+    b["picking"] = False
+    slug = provider_data.get("slug") or ""
+    base_url, key_env = _sw_provider_endpoint(
+        self, slug, getattr(b["ctx"], "user_providers", None),
+        getattr(b["ctx"], "custom_providers", None))
+    pick = {"model": chosen_model, "slug": slug,
+            "base_url": base_url, "key_env": key_env,
+            "format": _sw_infer_format(slug, base_url, chosen_model)}
+    step = b["step"]
+    b["picks"][step] = pick
+    if step == "strong":
+        b["step"] = "weak"
+        print(f"  ✓ strong: {chosen_model}  ({slug})")
+        print("  ⏚ now pick the WEAK tier model (cheap/fast requests)")
+        _sw_builder_open_picker(self)
+        return
+    print(f"  ✓ weak: {chosen_model}  ({slug})")
+    _sw_builder_finish(self)
+
+
+def _sw_builder_finish(self):
+    import sw_config
+    b = self._sw_builder
+    self._sw_builder = None
+    strong, weak = b["picks"]["strong"], b["picks"]["weak"]
+    opts = dict(b["opts"])
+    opts.update({
+        "strong": strong["model"], "strong_format": strong["format"],
+        "strong_base_url": strong["base_url"], "strong_key_env": strong["key_env"],
+        "weak": weak["model"], "weak_format": weak["format"],
+        "weak_base_url": weak["base_url"], "weak_key_env": weak["key_env"],
+    })
+    if b["opts"].get("classifier") == sw_config.DEFAULTS["classifier"] and \
+            weak["base_url"] != sw_config.DEFAULTS["base_url"]:
+        # Default classifier lives on the NVIDIA endpoint; when the weak tier
+        # comes from elsewhere, classify with the weak model itself so the
+        # config only needs providers the user actually has.
+        opts.update({"classifier": weak["model"],
+                     "classifier_base_url": weak["base_url"],
+                     "classifier_key_env": weak["key_env"],
+                     "classifier_format": weak["format"]})
+    path = sw_config.write_config(opts)
+    keys = ", ".join(f"${v}" for v in sorted({strong["key_env"], weak["key_env"]}))
+    print(f"  ✓ wrote {path}")
+    print(f"    strong: {strong['model']} ({strong['slug']}, {strong['format']})")
+    print(f"    weak:   {weak['model']} ({weak['slug']}, {weak['format']})")
+    print(f"    keys read at router start: {keys}")
+    print("  next: /switchyard start → /switchyard connect → /model switchyard")
+    try:
+        self._invalidate()
+    except Exception:
+        pass
+
+
+def _sw_builder_abort(self, reason="cancelled"):
+    self._sw_builder = None
+    print(f"  ⏚ switchyard build {reason} — run /switchyard build to restart")
+
+
 # ── class graft (called by the plugin at load time) ────────────────────────
 
 def graft():
@@ -352,6 +515,8 @@ def graft():
     orig_styles = base._build_tui_style_dict
     orig_usage = base._show_usage
     orig_model = base._handle_model_switch
+    orig_pick = base._handle_model_picker_selection
+    orig_close_picker = base._close_model_picker
 
     def patched_frags(self):
         frags = orig_frags(self)
@@ -405,12 +570,44 @@ def graft():
                 pass
         return orig_model(self, cmd_original)
 
+    def patched_pick(self, persist_global=False):
+        # /switchyard build wizard: divert model picks into the builder
+        # instead of switching the session model.
+        b = getattr(self, "_sw_builder", None)
+        if b and b.get("picking"):
+            try:
+                state = self._model_picker_state or {}
+                if state.get("stage") == "model":
+                    model_list = state.get("model_list") or []
+                    selected = state.get("selected", 0)
+                    if selected < len(model_list):
+                        provider_data = state.get("provider_data") or {}
+                        chosen = model_list[selected]
+                        orig_close_picker(self)
+                        _sw_builder_capture(self, provider_data, chosen)
+                        return
+            except Exception:
+                self._sw_builder = None
+        return orig_pick(self, persist_global)
+
+    def patched_close_picker(self):
+        b = getattr(self, "_sw_builder", None)
+        orig_close_picker(self)
+        if b and b.get("picking"):
+            try:
+                _sw_builder_abort(self)
+            except Exception:
+                self._sw_builder = None
+
     base._get_status_bar_fragments = patched_frags
     base._get_extra_tui_widgets = patched_widgets
     base._build_tui_style_dict = patched_styles
     base._show_usage = patched_usage
     base._handle_model_switch = patched_model
+    base._handle_model_picker_selection = patched_pick
+    base._close_model_picker = patched_close_picker
     base._sw_switch_route = _sw_switch_route
+    base._sw_start_builder = _sw_start_builder
     base._sw_grafted = True
     return True
 
