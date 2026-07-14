@@ -1,7 +1,7 @@
 ---
 name: nemo-switchyard
 description: "Set up and use the NeMo Switchyard integration for Hermes Agent: install the plugin and nvhermes launcher, then read live routing usage via the footer, /nvusage, and /usage."
-version: 0.2.2
+version: 0.3.0
 author: PicoNVIDIA
 license: MIT
 platforms: [linux, macos]
@@ -54,9 +54,10 @@ keys stay in environment variables.
    `hermes plugins enable nemo-switchyard` (Hermes's own enable command —
    do not hand-edit configuration files).
 
-2. Install the launcher: copy `<plugin-dir>/nvhermes.launcher` to
-   `~/.local/bin/nvhermes`, `chmod +x` it, and confirm `~/.local/bin` is on
-   the user's PATH.
+2. That's it — the plugin grafts the footer into the stock `hermes` command
+   when it loads. (An optional isolated wrapper exists: copy
+   `<plugin-dir>/nvhermes.launcher` to `~/.local/bin/nvhermes` + `chmod +x`.
+   Only offer it if the user asks for a separate command.)
 
 **Phase 2 — interview the user.** Ask these (offer the defaults so "just
 use defaults" is a valid answer):
@@ -105,11 +106,14 @@ SWITCHYARD_URL=http://127.0.0.1:<port> <plugin-dir>/scripts/doctor.sh  # every r
 ```
 
 **Phase 5 — hand off.** Tell the user, briefly: what was installed and
-started; launch a routed session with
-`nvhermes --provider switchyard -m auto` (plain `hermes` is untouched);
-routes appear in `/model`; `/switchyard` is the control panel;
-`/switchyard footer` cycles footer styles; `/switchyard usage` or `/usage`
-show routing stats. Offer to answer questions about the footer legend.
+started; route a session with `hermes --provider switchyard -m switchyard`,
+or pick `switchyard` in `/model` once — Hermes persists the choice, so
+plain `hermes` stays routed (and `/model` switches back anytime); the
+footer and green model name appear automatically in routed sessions —
+unrouted sessions look completely stock; one model, the router picks the
+tier per request (pin a specific upstream anytime from the catalog in
+`/model`); `/switchyard` is the control panel; `/switchyard footer` cycles
+footer styles; `/switchyard usage` or `/usage` show routing stats.
 
 ## Using it
 
@@ -117,14 +121,16 @@ show routing stats. Offer to answer questions about the footer legend.
 
 ```
 /switchyard init          # writes ~/.hermes/switchyard/routes.yaml
-                          # defaults: weak=nemotron ultra, strong=opus 4.8, nano classifier
+                          # one model "switchyard": weak=nemotron ultra, strong=opus 4.8, nano classifier
 /switchyard start         # runs a local router with it ($NVIDIA_API_KEY must be exported)
-/switchyard connect       # registers provider "switchyard" so /model lists the routes
+/switchyard connect       # registers provider "switchyard" so /model lists it
 ```
 
-Then relaunch routed: `nvhermes --provider switchyard -m auto`. Routes show
-in the `/model` picker under **Switchyard**; `/model strong`, `/model weak`,
-or `/switchyard use <route>` switch in place. `/switchyard disconnect`
+Then relaunch routed: `hermes --provider switchyard -m switchyard` (or pick
+`switchyard` once in `/model` — Hermes persists it) — one model named
+**switchyard**; the router picks the tier per request. To pin a specific
+upstream model, select it from the catalog in `/model` (every upstream
+model is exposed as a passthrough route). `/switchyard disconnect`
 removes the provider entry again (it is marker-bounded — nothing else in the
 user's configuration is touched, and both commands only run when the user
 invokes them). `init` accepts `key=value` overrides: `strong=`, `weak=`,
@@ -138,7 +144,7 @@ the router holds the real keys):
 
 ```
 OPENROUTER_BASE_URL=http://127.0.0.1:<port>/v1 OPENROUTER_API_KEY=dummy \
-  nvhermes --provider openrouter -m <route-id>
+  hermes --provider openrouter -m <route-id>
 ```
 
 Note: setting only the env base_url without `--provider openrouter` is not
@@ -185,7 +191,8 @@ switchyard section under `nvhermes`.
   (`/nvusage status` shows the fingerprint check) — use the
   `OPENROUTER_BASE_URL` + `--provider openrouter` launch shown above.
   `SWITCHYARD_URL` enables inspection only, not routing.
-- **Footer missing?** It needs `nvhermes` (plain `hermes` can't touch the
-  status bar) and `/nvfooter status` should not say `off`.
+- **Footer missing?** The session must actually route through Switchyard
+  (`/switchyard status`), the plugin must be enabled, and
+  `/switchyard footer` should not say `off`.
 - **Port conflicts:** pick a free port for test routers; check with
   `lsof -nP -iTCP:<port> -sTCP:LISTEN`.

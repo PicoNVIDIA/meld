@@ -1,18 +1,24 @@
-"""SwitchyardCLI — HermesCLI subclass that renders the Switchyard footer.
+"""Switchyard footer for Hermes — grafted onto HermesCLI at plugin load.
 
-Uses Hermes's protected TUI extension hooks (_build_tui_style_dict,
-_get_extra_tui_widgets) plus a defensive override of the internal
-_get_status_bar_fragments; every override falls back to stock rendering on
-any exception, so a Hermes upgrade degrades gracefully instead of crashing.
+The plugin calls graft() when Hermes loads it (same process), wrapping a few
+HermesCLI methods on the CLASS so the stock `hermes` command gets the footer,
+green model name, /usage section, and /model route quick-switch — no separate
+launcher needed. Every wrapper falls back to stock behavior on any exception,
+and everything stays dormant unless the session's endpoint fingerprints as a
+Switchyard router.
 
-Footer styles (persisted via sw_settings, switched live with /nvfooter):
-  row  — dedicated Switchyard line above the stock status bar (default)
-  bar  — Switchyard segments spliced into the stock bar, with →served-model
-  min  — stock bar plus a single trailing cost segment
-  off  — no Switchyard segments (model name still green while routed)
+State is initialized lazily on first render (_sw_ensure_init): detection and
+stats polling run in a daemon thread, never on the render path.
+
+A SwitchyardCLI subclass is kept for the legacy `nvhermes` wrapper; grafted
+wrappers no-op for it (the subclass methods already do the work).
+
+Footer styles (persisted via sw_settings, switched live with /switchyard
+footer): row (default) · bar · min · off.
 """
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
@@ -25,270 +31,391 @@ if str(_DIR) not in sys.path:
 import sw_settings
 import switchyard_client as swc
 
-from cli import HermesCLI
-
 _POLL_SECS = 2.0
 _NV_GREEN = "#76B900"
 _NV_GREEN_DIM = "#5a8c00"
 
 
-class SwitchyardCLI(HermesCLI):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._sw_footer_mode = sw_settings.load_mode()
-        self._sw_snapshot = None
-        self._sw_decisions = None
-        # Green/footer activate only when THIS session's endpoint is a
-        # Switchyard router — a router merely running nearby doesn't count.
-        # The endpoint can arrive as self.base_url (config model.base_url /
-        # OPENROUTER_BASE_URL) or via a provider profile's env base_url.
-        import os as _os
+# ── lazy state ──────────────────────────────────────────────────────────────
 
-        provider_base_url = None
+def _sw_ensure_init(self):
+    """Idempotent; cheap after the first call. Never blocks the caller."""
+    if getattr(self, "_sw_inited", False):
+        return
+    self._sw_inited = True
+    self._sw_active = False
+    self._sw_url = None
+    self._sw_snapshot = None
+    self._sw_decisions = None
+    self._sw_footer_mode = sw_settings.load_mode()
+    threading.Thread(target=_sw_detect_and_poll, args=(self,),
+                     name="switchyard-poll", daemon=True).start()
+
+
+def _sw_detect_and_poll(self):
+    provider_base_url = None
+    try:
+        import cli as _cli_mod
+        prov = getattr(self, "requested_provider", None) or getattr(self, "provider", "")
+        pcfg = (_cli_mod.CLI_CONFIG.get("providers") or {}).get(prov) or {}
+        provider_base_url = pcfg.get("base_url") or pcfg.get("api") or pcfg.get("url")
+    except Exception:
+        pass
+    for cand in (
+        getattr(self, "base_url", None),
+        provider_base_url,
+        os.environ.get("OPENAI_BASE_URL"),
+        os.environ.get("OPENROUTER_BASE_URL"),
+    ):
+        url = swc.detect(cand)
+        if url:
+            self._sw_url = url
+            self._sw_active = True
+            break
+    if not self._sw_active:
+        return
+    while True:
         try:
-            import cli as _cli_mod
-            prov = getattr(self, "requested_provider", None) or getattr(self, "provider", "")
-            pcfg = (_cli_mod.CLI_CONFIG.get("providers") or {}).get(prov) or {}
-            provider_base_url = pcfg.get("base_url") or pcfg.get("api") or pcfg.get("url")
+            self._sw_snapshot = swc.stats(self._sw_url)
+            self._sw_decisions = swc.decisions(self._sw_url)
+            try:
+                self._invalidate()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        time.sleep(_POLL_SECS)
+
+
+# ── rendering helpers (self-taking functions, shared by graft + subclass) ──
+
+def _sw_transform_fragments(self, frags):
+    mode = self._sw_footer_mode
+    model_idx = None
+    for i, frag in enumerate(frags):
+        if len(frag) >= 2 and "status-bar-strong" in frag[0]:
+            frags[i] = ("class:status-bar-nv",) + tuple(frag[1:])
+            model_idx = i
+            break
+
+    if mode == "bar":
+        served = _sw_served_model_short(self)
+        if served and model_idx is not None:
+            frags.insert(model_idx + 1, ("class:status-bar-nv-dim", f"→{served}"))
+        seg = _sw_inline_segment(self)
+        if seg:
+            insert_at = next(
+                (i + 1 for i, f in enumerate(frags)
+                 if len(f) >= 2 and f[1].strip().endswith("%")),
+                len(frags),
+            )
+            frags[insert_at:insert_at] = [
+                ("class:status-bar-dim", " │ "),
+                ("class:status-bar-nv", seg),
+            ]
+    elif mode == "min":
+        st = self._sw_snapshot
+        if st:
+            frags += [
+                ("class:status-bar-dim", " │ "),
+                ("class:status-bar-nv", f"⏚ {swc.fmt_cost(swc.total_cost(st))}"),
+            ]
+    return frags
+
+
+def _sw_row_fragments(self):
+    try:
+        st = self._sw_snapshot
+        if not st:
+            return [
+                ("class:status-bar-nv", " ⏚ switchyard "),
+                ("class:status-bar-dim", "connecting…"),
+            ]
+        width = self._get_tui_terminal_width()
+        reqs = st.get("total_requests", 0)
+        cost = swc.fmt_cost(swc.total_cost(st))
+        if width < 76:
+            return [
+                ("class:status-bar-nv", " ⏚ swyd"),
+                ("class:status-bar-dim", " · "),
+                ("class:status-bar", f"{reqs} req"),
+                ("class:status-bar-dim", " · "),
+                ("class:status-bar-nv", cost),
+            ]
+        sep = ("class:status-bar-dim", " │ ")
+        tok = swc.fmt_tokens((st.get("total_tokens") or {}).get("total"))
+        route = str(getattr(self, "model", "") or "").rsplit("/", 1)[-1][:26]
+        frags = [("class:status-bar-nv", " ⏚ switchyard")]
+        if route and route != "switchyard":
+            frags += [sep, ("class:status-bar", route)]
+        frags += [
+            sep,
+            ("class:status-bar", f"{reqs} req"),
+            sep,
+            ("class:status-bar", f"{tok} tok"),
+            sep,
+            ("class:status-bar-nv", cost),
+        ]
+        tiers = swc.tier_counts(st)
+        if tiers:
+            tier_txt = " · ".join(f"{t} {n}" for t, n in sorted(tiers.items()))
+            frags += [sep, ("class:status-bar-dim", tier_txt)]
+        served = _sw_served_model_short(self)
+        if served:
+            frags += [sep, ("class:status-bar-nv-dim", f"→ {served}")]
+        return frags
+    except Exception:
+        return [("class:status-bar-nv", " ⏚ switchyard")]
+
+
+def _sw_served_model_short(self):
+    try:
+        entry = swc.latest_decision(self._sw_decisions)
+        if entry:
+            return swc.short_model(entry.get("served_model"))[:26]
+    except Exception:
+        pass
+    return ""
+
+
+def _sw_inline_segment(self):
+    st = self._sw_snapshot
+    if not st:
+        return ""
+    return f"⏚ {st.get('total_requests', 0)}req {swc.fmt_cost(swc.total_cost(st))}"
+
+
+def _sw_switch_route(self, route):
+    """Switch this session to a Switchyard route (same endpoint, new model id)."""
+    _sw_ensure_init(self)
+    if not getattr(self, "_sw_active", False):
+        return "not routed through switchyard — see /switchyard status"
+    rts, _default = swc.routes(self._sw_url)
+    ids = [rt["id"] for rt in rts]
+    if route not in ids:
+        return f"unknown route {route!r} — available: {', '.join(ids) or 'none'}"
+    old = self.model
+    if self.agent is not None:
+        try:
+            self.agent.switch_model(
+                new_model=route,
+                new_provider=self.provider,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                api_mode=self.api_mode,
+            )
+        except Exception as exc:
+            return f"switch failed ({exc}); staying on {old}"
+    self.model = route
+    self._pending_model_switch_note = (
+        f"[Note: switchyard route was switched from {old} to {route}. "
+        f"The router decides which upstream model serves each request.]"
+    )
+    try:
+        self._invalidate()
+    except Exception:
+        pass
+    return f"✓ route → {route}  (was {old})"
+
+
+def _sw_extra_row_widget(self):
+    """Build the dedicated-row widget (mode 'row')."""
+    from prompt_toolkit.filters import Condition
+    from prompt_toolkit.layout import (
+        ConditionalContainer,
+        FormattedTextControl,
+        Window,
+    )
+    return ConditionalContainer(
+        Window(
+            content=FormattedTextControl(lambda: _sw_row_fragments(self)),
+            height=1,
+            wrap_lines=False,
+        ),
+        filter=Condition(
+            lambda: getattr(self, "_sw_active", False)
+            and self._sw_footer_mode == "row"
+            and getattr(self, "_status_bar_visible", True)
+        ),
+    )
+
+
+def _sw_add_styles(styles):
+    try:
+        base = styles.get("status-bar", "")
+        bg = next((t for t in base.split() if t.startswith("bg:")), "bg:#1a1a2e")
+    except Exception:
+        bg = "bg:#1a1a2e"
+    styles["status-bar-nv"] = f"{bg} {_NV_GREEN} bold"
+    styles["status-bar-nv-dim"] = f"{bg} {_NV_GREEN_DIM}"
+    return styles
+
+
+def _sw_usage_section(self):
+    if not getattr(self, "_sw_active", False):
+        return
+    try:
+        st = swc.stats(self._sw_url)
+        dec = swc.decisions(self._sw_url)
+        print()
+        print(swc.render_usage(self._sw_url, st, dec, heading="switchyard", color=False))
+    except Exception:
+        pass
+
+
+def _sw_model_switch_preamble(self, cmd_original):
+    """Handle /model for switchyard routes. Returns True when fully handled."""
+    if not getattr(self, "_sw_active", False):
+        return False
+    try:
+        parts = cmd_original.split(None, 1)
+        raw = parts[1].strip() if len(parts) > 1 else ""
+        rts, default = swc.routes(self._sw_url)
+        ids = [rt["id"] for rt in rts]
+        if raw and not raw.startswith("-") and raw.split()[0] in ids:
+            print("  " + _sw_switch_route(self, raw.split()[0]))
+            return True
+        if not raw and ids:
+            current = self.model
+            marks = ", ".join(
+                ("▶ " if rt == current else "") + rt + (" (default)" if rt == default else "")
+                for rt in ids)
+            print(f"  ⏚ switchyard routes: {marks}")
+            print("    switch with /model <route> — provider picker below")
+    except Exception:
+        pass
+    return False
+
+
+# ── class graft (called by the plugin at load time) ────────────────────────
+
+def graft():
+    """Wrap HermesCLI methods in place so stock `hermes` gets the footer.
+
+    Idempotent. Wrappers no-op for SwitchyardCLI instances (legacy nvhermes
+    wrapper — its own overrides already apply) and fall back to the original
+    method on any exception.
+    """
+    import cli as hermes_cli_mod
+
+    base = hermes_cli_mod.HermesCLI
+    if getattr(base, "_sw_grafted", False):
+        return True
+
+    orig_frags = base._get_status_bar_fragments
+    orig_widgets = base._get_extra_tui_widgets
+    orig_styles = base._build_tui_style_dict
+    orig_usage = base._show_usage
+    orig_model = base._handle_model_switch
+
+    def patched_frags(self):
+        frags = orig_frags(self)
+        if getattr(self, "_sw_wrapper", False):
+            return frags
+        try:
+            _sw_ensure_init(self)
+            if not self._sw_active or not frags:
+                return frags
+            return _sw_transform_fragments(self, list(frags))
+        except Exception:
+            return frags
+
+    def patched_widgets(self):
+        widgets = list(orig_widgets(self))
+        if getattr(self, "_sw_wrapper", False):
+            return widgets
+        try:
+            _sw_ensure_init(self)
+            widgets.append(_sw_extra_row_widget(self))
+        except Exception:
+            pass
+        return widgets
+
+    def patched_styles(self):
+        styles = orig_styles(self)
+        if getattr(self, "_sw_wrapper", False):
+            return styles
+        try:
+            return _sw_add_styles(styles)
+        except Exception:
+            return styles
+
+    def patched_usage(self):
+        orig_usage(self)
+        if getattr(self, "_sw_wrapper", False):
+            return
+        try:
+            _sw_ensure_init(self)
+            _sw_usage_section(self)
         except Exception:
             pass
 
-        self._sw_url = None
-        for cand in (
-            getattr(self, "base_url", None),
-            provider_base_url,
-            _os.environ.get("OPENAI_BASE_URL"),
-            _os.environ.get("OPENROUTER_BASE_URL"),
-        ):
-            self._sw_url = swc.detect(cand)
-            if self._sw_url:
-                break
-        self._sw_active = self._sw_url is not None
-        if self._sw_active:
-            threading.Thread(
-                target=self._sw_poll_loop, name="switchyard-poll", daemon=True
-            ).start()
-
-    # ── polling ────────────────────────────────────────────────────────────
-    def _sw_poll_loop(self):
-        while True:
+    def patched_model(self, cmd_original):
+        if not getattr(self, "_sw_wrapper", False):
             try:
-                self._sw_snapshot = swc.stats(self._sw_url)
-                self._sw_decisions = swc.decisions(self._sw_url)
-                try:
-                    self._invalidate()
-                except Exception:
-                    pass
+                _sw_ensure_init(self)
+                if _sw_model_switch_preamble(self, cmd_original):
+                    return
             except Exception:
                 pass
-            time.sleep(_POLL_SECS)
+        return orig_model(self, cmd_original)
 
-    # ── styles (protected hook) ────────────────────────────────────────────
+    base._get_status_bar_fragments = patched_frags
+    base._get_extra_tui_widgets = patched_widgets
+    base._build_tui_style_dict = patched_styles
+    base._show_usage = patched_usage
+    base._handle_model_switch = patched_model
+    base._sw_switch_route = _sw_switch_route
+    base._sw_grafted = True
+    return True
+
+
+# ── legacy wrapper subclass (nvhermes) ──────────────────────────────────────
+
+try:
+    from cli import HermesCLI as _HermesCLI
+except Exception:  # pragma: no cover — module usable without hermes on path
+    _HermesCLI = object
+
+
+class SwitchyardCLI(_HermesCLI):
+    _sw_wrapper = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _sw_ensure_init(self)
+
     def _build_tui_style_dict(self):
-        styles = super()._build_tui_style_dict()
-        try:
-            base = styles.get("status-bar", "")
-            bg = next((t for t in base.split() if t.startswith("bg:")), "bg:#1a1a2e")
-        except Exception:
-            bg = "bg:#1a1a2e"
-        styles["status-bar-nv"] = f"{bg} {_NV_GREEN} bold"
-        styles["status-bar-nv-dim"] = f"{bg} {_NV_GREEN_DIM}"
-        return styles
+        return _sw_add_styles(super()._build_tui_style_dict())
 
-    # ── stock bar transform (all styles) ───────────────────────────────────
     def _get_status_bar_fragments(self):
         frags = super()._get_status_bar_fragments()
-        if not self._sw_active or not frags:
+        if not getattr(self, "_sw_active", False) or not frags:
             return frags
         try:
-            return self._sw_transform_fragments(list(frags))
+            return _sw_transform_fragments(self, list(frags))
         except Exception:
             return frags
 
-    def _sw_transform_fragments(self, frags):
-        mode = self._sw_footer_mode
-        model_idx = None
-        for i, frag in enumerate(frags):
-            if len(frag) >= 2 and "status-bar-strong" in frag[0]:
-                frags[i] = ("class:status-bar-nv",) + tuple(frag[1:])
-                model_idx = i
-                break
-
-        if mode == "bar":
-            served = self._sw_served_model_short()
-            if served and model_idx is not None:
-                frags.insert(model_idx + 1, ("class:status-bar-nv-dim", f"→{served}"))
-            seg = self._sw_inline_segment()
-            if seg:
-                insert_at = next(
-                    (i + 1 for i, f in enumerate(frags)
-                     if len(f) >= 2 and f[1].strip().endswith("%")),
-                    len(frags),
-                )
-                frags[insert_at:insert_at] = [
-                    ("class:status-bar-dim", " │ "),
-                    ("class:status-bar-nv", seg),
-                ]
-        elif mode == "min":
-            st = self._sw_snapshot
-            if st:
-                frags += [
-                    ("class:status-bar-dim", " │ "),
-                    ("class:status-bar-nv", f"⏚ {swc.fmt_cost(swc.total_cost(st))}"),
-                ]
-        return frags
-
-    # ── dedicated row (protected hook) ─────────────────────────────────────
     def _get_extra_tui_widgets(self):
         widgets = list(super()._get_extra_tui_widgets())
         try:
-            from prompt_toolkit.filters import Condition
-            from prompt_toolkit.layout import (
-                ConditionalContainer,
-                FormattedTextControl,
-                Window,
-            )
+            widgets.append(_sw_extra_row_widget(self))
         except Exception:
-            return widgets
-        widgets.append(
-            ConditionalContainer(
-                Window(
-                    content=FormattedTextControl(self._sw_row_fragments),
-                    height=1,
-                    wrap_lines=False,
-                ),
-                filter=Condition(
-                    lambda: self._sw_active
-                    and self._sw_footer_mode == "row"
-                    and getattr(self, "_status_bar_visible", True)
-                ),
-            )
-        )
+            pass
         return widgets
 
-    def _sw_row_fragments(self):
-        try:
-            st = self._sw_snapshot
-            if not st:
-                return [
-                    ("class:status-bar-nv", " ⏚ switchyard "),
-                    ("class:status-bar-dim", "connecting…"),
-                ]
-            width = self._get_tui_terminal_width()
-            reqs = st.get("total_requests", 0)
-            cost = swc.fmt_cost(swc.total_cost(st))
-            if width < 76:
-                return [
-                    ("class:status-bar-nv", " ⏚ swyd"),
-                    ("class:status-bar-dim", " · "),
-                    ("class:status-bar", f"{reqs} req"),
-                    ("class:status-bar-dim", " · "),
-                    ("class:status-bar-nv", cost),
-                ]
-            sep = ("class:status-bar-dim", " │ ")
-            tok = swc.fmt_tokens((st.get("total_tokens") or {}).get("total"))
-            route = str(getattr(self, "model", "") or "").rsplit("/", 1)[-1][:26]
-            frags = [
-                ("class:status-bar-nv", " ⏚ switchyard"),
-                sep,
-                ("class:status-bar", route),
-                sep,
-                ("class:status-bar", f"{reqs} req"),
-                sep,
-                ("class:status-bar", f"{tok} tok"),
-                sep,
-                ("class:status-bar-nv", cost),
-            ]
-            tiers = swc.tier_counts(st)
-            if tiers:
-                tier_txt = " · ".join(f"{t} {n}" for t, n in sorted(tiers.items()))
-                frags += [sep, ("class:status-bar-dim", tier_txt)]
-            served = self._sw_served_model_short()
-            if served:
-                frags += [sep, ("class:status-bar-nv-dim", f"→ {served}")]
-            return frags
-        except Exception:
-            return [("class:status-bar-nv", " ⏚ switchyard")]
-
-    def _sw_served_model_short(self):
-        try:
-            entry = swc.latest_decision(self._sw_decisions)
-            if entry:
-                return swc.short_model(entry.get("served_model"))[:26]
-        except Exception:
-            pass
-        return ""
-
-    def _sw_inline_segment(self):
-        st = self._sw_snapshot
-        if not st:
-            return ""
-        return f"⏚ {st.get('total_requests', 0)}req {swc.fmt_cost(swc.total_cost(st))}"
-
-    # ── /model integration ─────────────────────────────────────────────────
     def _sw_switch_route(self, route):
-        """Switch this session to a Switchyard route (same endpoint, new model id)."""
-        if not self._sw_active:
-            return "not routed through switchyard — see /switchyard status"
-        rts, _default = swc.routes(self._sw_url)
-        ids = [rt["id"] for rt in rts]
-        if route not in ids:
-            return f"unknown route {route!r} — available: {', '.join(ids) or 'none'}"
-        old = self.model
-        if self.agent is not None:
-            try:
-                self.agent.switch_model(
-                    new_model=route,
-                    new_provider=self.provider,
-                    api_key=self.api_key,
-                    base_url=self.base_url,
-                    api_mode=self.api_mode,
-                )
-            except Exception as exc:
-                return f"switch failed ({exc}); staying on {old}"
-        self.model = route
-        self._pending_model_switch_note = (
-            f"[Note: switchyard route was switched from {old} to {route}. "
-            f"The router decides which upstream model serves each request.]"
-        )
-        try:
-            self._invalidate()
-        except Exception:
-            pass
-        return f"✓ route → {route}  (was {old})"
+        return _sw_switch_route(self, route)
 
     def _handle_model_switch(self, cmd_original):
-        """/model with a Switchyard route id switches in-place; bare /model
-        lists routes above the stock picker. Everything else → stock path."""
-        if self._sw_active:
-            try:
-                parts = cmd_original.split(None, 1)
-                raw = parts[1].strip() if len(parts) > 1 else ""
-                rts, default = swc.routes(self._sw_url)
-                ids = [rt["id"] for rt in rts]
-                if raw and not raw.startswith("-") and raw.split()[0] in ids:
-                    print("  " + self._sw_switch_route(raw.split()[0]))
-                    return
-                if not raw and ids:
-                    current = self.model
-                    marks = ", ".join(
-                        ("▶ " if rt == current else "") + rt + (" (default)" if rt == default else "")
-                        for rt in ids)
-                    print(f"  ⏚ switchyard routes: {marks}")
-                    print("    switch with /model <route> — provider picker below")
-            except Exception:
-                pass
-        return super()._handle_model_switch(cmd_original)
-
-    # ── native /usage section ──────────────────────────────────────────────
-    def _show_usage(self):
-        super()._show_usage()
-        if not self._sw_active:
-            return
         try:
-            st = swc.stats(self._sw_url)
-            dec = swc.decisions(self._sw_url)
-            print()
-            print(swc.render_usage(self._sw_url, st, dec, heading="switchyard", color=False))
+            if _sw_model_switch_preamble(self, cmd_original):
+                return
         except Exception:
             pass
+        return super()._handle_model_switch(cmd_original)
+
+    def _show_usage(self):
+        super()._show_usage()
+        _sw_usage_section(self)

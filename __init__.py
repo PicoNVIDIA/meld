@@ -2,7 +2,8 @@
 
 Registers the /switchyard command hub (plus /nvusage and /nvfooter aliases)
 and bundles the nemo-switchyard skill. The TUI footer itself lives in
-nvhermes_cli.py (a wrapper CLI — Hermes has no plugin API for the status bar).
+nvhermes_cli.py and is grafted onto HermesCLI at load, so the stock `hermes`
+command renders it (dormant unless the session routes through Switchyard).
 """
 from __future__ import annotations
 
@@ -21,8 +22,7 @@ _NOT_FOUND_HINT = (
     "no switchyard router detected.\n"
     "  · build a config:  /switchyard init          (ultra=weak, opus=strong defaults)\n"
     "  · start a router:  /switchyard start\n"
-    "  · route a session through it:  OPENROUTER_BASE_URL=http://127.0.0.1:<port>/v1"
-    " OPENROUTER_API_KEY=dummy nvhermes --provider openrouter -m auto\n"
+    "  · connect + relaunch:  /switchyard connect, then hermes --provider switchyard -m switchyard\n"
     "  · or set SWITCHYARD_URL for inspection without routing\n"
     "  · checks: /switchyard status"
 )
@@ -45,6 +45,14 @@ init keys: strong= weak= classifier= base_url= key_env= port= profile= strong_fo
 
 def register(ctx):
     g, d, b, r = swc.GREEN, swc.DIM, swc.BOLD, swc.RST
+
+    # Graft the footer onto HermesCLI itself so the stock `hermes` command
+    # renders it (dormant unless the session routes through Switchyard).
+    try:
+        import nvhermes_cli
+        nvhermes_cli.graft()
+    except Exception:
+        pass
 
     def _cli_ref():
         try:
@@ -129,8 +137,8 @@ def register(ctx):
                   "decisions endpoint (/v1/routing/decisions — needs deterministic profile)",
                   optional=True)
         check(routed, "this session routes through switchyard (green model name)", optional=True)
-        check(ref is not None and hasattr(ref, "_sw_footer_mode"),
-              "running under nvhermes (footer available)", optional=True)
+        check(ref is not None and hasattr(ref, "_sw_switch_route"),
+              "footer grafted into this session", optional=True)
         lines.append(f"  {d}footer mode: {sw_settings.load_mode()}{r}")
         return "\n".join(lines)
 
@@ -171,7 +179,7 @@ def register(ctx):
             return "usage: /switchyard use <route> — see /switchyard routes"
         ref = _cli_ref()
         if ref is None or not hasattr(ref, "_sw_switch_route"):
-            return "route switching needs an nvhermes session routed through switchyard"
+            return "route switching needs a session routed through switchyard"
         return ref._sw_switch_route(route)
 
     def _footer(mode):
@@ -186,14 +194,14 @@ def register(ctx):
         sw_settings.save_mode(mode)
         ref = _cli_ref()
         applied = False
-        if ref is not None and hasattr(ref, "_sw_footer_mode"):
+        if ref is not None:
             ref._sw_footer_mode = mode
             try:
                 ref._invalidate()
             except Exception:
                 pass
             applied = True
-        note = "" if applied else " (persisted — takes effect under nvhermes)"
+        note = "" if applied else " (persisted — applies to the next session)"
         return f"footer → {mode}{note}"
 
     def _init(raw):
@@ -205,12 +213,11 @@ def register(ctx):
         _save_setting("router_port", int(opts["port"]))
         return (
             f"{g}{b}✓ wrote {path}{r}\n"
-            f"  routes: {b}auto{r} {d}(classifier: {opts['classifier'].rsplit('/', 1)[-1]}){r}"
-            f" · {b}strong{r} {d}({opts['strong'].rsplit('/', 1)[-1]}){r}"
-            f" · {b}weak{r} {d}({opts['weak'].rsplit('/', 1)[-1]}){r}\n"
+            f"  one model: {b}switchyard{r} {d}— {opts['classifier'].rsplit('/', 1)[-1]} picks between"
+            f" {opts['strong'].rsplit('/', 1)[-1]} (strong) and {opts['weak'].rsplit('/', 1)[-1]} (weak){r}\n"
             f"  key: read from ${opts['key_env']} at router start (never stored)\n"
             f"  next: {b}/switchyard start{r} → {b}/switchyard connect{r} → relaunch with"
-            f" {b}nvhermes --provider switchyard -m auto{r}"
+            f" {b}hermes --provider switchyard -m switchyard{r}"
         )
 
     def _connect(raw):
@@ -235,7 +242,7 @@ def register(ctx):
         return (
             f"{g}{b}✓ {msg}{r}\n"
             f"  provider {b}switchyard{r} → {root}/v1  {d}routes: {', '.join(ids) or '-'}{r}\n"
-            f"  · new sessions: {b}nvhermes --provider switchyard -m {ids[0] if ids else '<route>'}{r}\n"
+            f"  · new sessions: {b}hermes --provider switchyard -m {ids[0] if ids else '<route>'}{r}\n"
             f"  · the /model picker now lists these under {b}Switchyard{r}\n"
             f"  · undo anytime: {b}/switchyard disconnect{r}"
         )

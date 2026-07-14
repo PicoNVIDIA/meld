@@ -33,9 +33,9 @@ else
 fi
 
 if command -v nvhermes >/dev/null 2>&1; then
-  pass "nvhermes launcher on PATH"
+  pass "nvhermes launcher on PATH (optional)"
 else
-  failf "nvhermes launcher on PATH (copy nvhermes.launcher to ~/.local/bin/nvhermes, chmod +x)"
+  info "nvhermes launcher not installed — optional; the footer works in plain hermes via the plugin"
 fi
 
 if curl -fsS -m 2 "$URL/health" 2>/dev/null | grep -q '"ok"'; then

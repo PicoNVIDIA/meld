@@ -72,8 +72,8 @@ defaults:
   format: openai
 
 routes:
-  auto:                              # classifier picks the tier per request
-    type: deterministic
+  switchyard:                        # the one model users pick — classifier
+    type: deterministic              # routes each request to a tier behind it
     profile: {profile}
     enable_stats: true
     fallback_target_on_evict: strong
@@ -100,25 +100,8 @@ routes:
       format: {weak_format}
       timeout_secs: {timeout_secs}
 
-  strong:                            # pin to the strong model
-    type: model
-    target:
-      id: strong
-      model: {strong}
-      api_key: {key}
-      base_url: {base_url}
-      format: {strong_format}
-      timeout_secs: {timeout_secs}
-
-  weak:                              # pin to the weak model
-    type: model
-    target:
-      id: weak
-      model: {weak}
-      api_key: {key}
-      base_url: {base_url}
-      format: {weak_format}
-      timeout_secs: {timeout_secs}
+# Pinning to one model needs no extra routes: every upstream catalog model is
+# also exposed as a passthrough route (e.g. /model {strong}).
 """.format(**o)
 
 
@@ -355,8 +338,8 @@ def _cli(argv):
         if unknown:
             return 1, "unrecognized: " + " ".join(unknown) + "\nknown keys: " + " ".join(sorted(KNOWN_KEYS))
         path = write_config(opts)
-        return 0, (f"wrote {path}\nroutes: auto (classifier {opts['classifier']}), "
-                   f"strong ({opts['strong']}), weak ({opts['weak']})\n"
+        return 0, (f"wrote {path}\nroute: switchyard — classifier {opts['classifier']} picks between "
+                   f"strong ({opts['strong']}) and weak ({opts['weak']})\n"
                    f"api key: read from ${opts['key_env']} at router start")
 
     if cmd == "start":
