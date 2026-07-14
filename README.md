@@ -9,7 +9,7 @@ model name in NVIDIA green while your session routes through Switchyard.
 ## Quick start
 
 ```bash
-hermes skills install PicoNVIDIA/meld --category mlops   # the self-setup skill
+hermes skills install PicoNVIDIA/meld/nemo-switchyard --category mlops   # the self-setup skill
 # then tell your agent: "set up the switchyard integration"
 ```
 
@@ -26,7 +26,7 @@ OPENROUTER_BASE_URL=http://127.0.0.1:<port>/v1 OPENROUTER_API_KEY=dummy \
 Hermes's own model settings — your call, nothing here changes it for you.)
 
 Any agent that can run shell commands can perform the setup — point it at
-[`skill/SKILL.md`](skill/SKILL.md) (agentskills.io format).
+[`nemo-switchyard/SKILL.md`](nemo-switchyard/SKILL.md) (agentskills.io format).
 
 ## Footer styles
 
@@ -50,7 +50,7 @@ min  ⚕ llm-classifier │ 17.9K/272K │ [█░░░░░░░░░] 7% �
 | `nvhermes_cli.py`, `nvhermes_main.py` | `SwitchyardCLI` wrapper (footer, green model, `/usage` section) |
 | `nvhermes.launcher` | launcher template for `~/.local/bin/nvhermes` |
 | `scripts/doctor.sh` | PASS/FAIL install & router checks (exit 0 = healthy) |
-| `skill/SKILL.md` | self-setup skill: agents follow it to install and verify |
+| `nemo-switchyard/SKILL.md` | self-setup skill: agents follow it to install and verify |
 
 ## Health & updates
 

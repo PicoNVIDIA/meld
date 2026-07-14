@@ -125,7 +125,7 @@ def register(ctx):
     try:
         ctx.register_skill(
             "nemo-switchyard",
-            _DIR / "skill" / "SKILL.md",
+            _DIR / "nemo-switchyard" / "SKILL.md",
             description="Set up and use the NeMo Switchyard integration for Hermes",
         )
     except Exception:
