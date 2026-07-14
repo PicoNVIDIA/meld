@@ -37,6 +37,12 @@ _NV_GREEN_DIM = "#5a8c00"
 
 
 # ── lazy state ──────────────────────────────────────────────────────────────
+#
+# The Switchyard UX is active only while BOTH hold, re-checked every poll:
+#   1. the session's endpoint fingerprints as a Switchyard router, and
+#   2. the currently selected /model is one of its configured routes
+#      (e.g. "switchyard") — pinning a catalog model or switching providers
+#      returns the TUI to a completely stock look.
 
 def _sw_ensure_init(self):
     """Idempotent; cheap after the first call. Never blocks the caller."""
@@ -44,15 +50,19 @@ def _sw_ensure_init(self):
         return
     self._sw_inited = True
     self._sw_active = False
+    self._sw_endpoint_root = None
     self._sw_url = None
     self._sw_snapshot = None
     self._sw_decisions = None
     self._sw_footer_mode = sw_settings.load_mode()
-    threading.Thread(target=_sw_detect_and_poll, args=(self,),
+    self._sw_detect_cache = {}
+    self._sw_routes_cache = (None, [], 0.0)
+    threading.Thread(target=_sw_poll_loop, args=(self,),
                      name="switchyard-poll", daemon=True).start()
 
 
-def _sw_detect_and_poll(self):
+def _sw_current_root(self):
+    """Detect the session's endpoint, cached per URL (60s hit / 30s miss)."""
     provider_base_url = None
     try:
         import cli as _cli_mod
@@ -61,27 +71,57 @@ def _sw_detect_and_poll(self):
         provider_base_url = pcfg.get("base_url") or pcfg.get("api") or pcfg.get("url")
     except Exception:
         pass
+    now = time.monotonic()
     for cand in (
         getattr(self, "base_url", None),
         provider_base_url,
         os.environ.get("OPENAI_BASE_URL"),
         os.environ.get("OPENROUTER_BASE_URL"),
     ):
-        url = swc.detect(cand)
-        if url:
-            self._sw_url = url
-            self._sw_active = True
-            break
-    if not self._sw_active:
-        return
+        norm = swc.normalize_root(cand)
+        if not norm:
+            continue
+        cached = self._sw_detect_cache.get(norm)
+        if cached and now - cached[1] < (60.0 if cached[0] else 30.0):
+            root = cached[0]
+        else:
+            root = swc.detect(norm)
+            self._sw_detect_cache[norm] = (root, now)
+        if root:
+            return root
+    return None
+
+
+def _sw_route_ids(self, root):
+    """Configured route ids at *root*, cached ~10s."""
+    cached_root, ids, ts = self._sw_routes_cache
+    now = time.monotonic()
+    if cached_root == root and now - ts < 10.0:
+        return ids
+    rts, _default = swc.routes(root)
+    ids = [rt["id"] for rt in rts]
+    self._sw_routes_cache = (root, ids, now)
+    return ids
+
+
+def _sw_poll_loop(self):
     while True:
         try:
-            self._sw_snapshot = swc.stats(self._sw_url)
-            self._sw_decisions = swc.decisions(self._sw_url)
-            try:
-                self._invalidate()
-            except Exception:
-                pass
+            root = _sw_current_root(self)
+            self._sw_endpoint_root = root
+            self._sw_url = root
+            active = False
+            if root:
+                active = str(getattr(self, "model", "") or "") in _sw_route_ids(self, root)
+                if active:
+                    self._sw_snapshot = swc.stats(root)
+                    self._sw_decisions = swc.decisions(root)
+            if active != self._sw_active or active:
+                self._sw_active = active
+                try:
+                    self._invalidate()
+                except Exception:
+                    pass
         except Exception:
             pass
         time.sleep(_POLL_SECS)
@@ -188,10 +228,10 @@ def _sw_inline_segment(self):
 def _sw_switch_route(self, route):
     """Switch this session to a Switchyard route (same endpoint, new model id)."""
     _sw_ensure_init(self)
-    if not getattr(self, "_sw_active", False):
-        return "not routed through switchyard — see /switchyard status"
-    rts, _default = swc.routes(self._sw_url)
-    ids = [rt["id"] for rt in rts]
+    root = getattr(self, "_sw_endpoint_root", None)
+    if not root:
+        return "this session's endpoint is not a switchyard router — see /switchyard status"
+    ids = _sw_route_ids(self, root)
     if route not in ids:
         return f"unknown route {route!r} — available: {', '.join(ids) or 'none'}"
     old = self.model
@@ -207,6 +247,7 @@ def _sw_switch_route(self, route):
         except Exception as exc:
             return f"switch failed ({exc}); staying on {old}"
     self.model = route
+    self._sw_active = True  # poll loop confirms on its next cycle
     self._pending_model_switch_note = (
         f"[Note: switchyard route was switched from {old} to {route}. "
         f"The router decides which upstream model serves each request.]"
@@ -264,21 +305,25 @@ def _sw_usage_section(self):
 
 
 def _sw_model_switch_preamble(self, cmd_original):
-    """Handle /model for switchyard routes. Returns True when fully handled."""
-    if not getattr(self, "_sw_active", False):
+    """Handle /model for switchyard routes. Returns True when fully handled.
+
+    Keys off the endpoint (not the active flag) so `/model switchyard` can
+    switch INTO the Switchyard UX from a pinned catalog model.
+    """
+    root = getattr(self, "_sw_endpoint_root", None)
+    if not root:
         return False
     try:
         parts = cmd_original.split(None, 1)
         raw = parts[1].strip() if len(parts) > 1 else ""
-        rts, default = swc.routes(self._sw_url)
-        ids = [rt["id"] for rt in rts]
+        ids = _sw_route_ids(self, root)
         if raw and not raw.startswith("-") and raw.split()[0] in ids:
             print("  " + _sw_switch_route(self, raw.split()[0]))
             return True
         if not raw and ids:
             current = self.model
             marks = ", ".join(
-                ("▶ " if rt == current else "") + rt + (" (default)" if rt == default else "")
+                ("▶ " if rt == current else "") + rt
                 for rt in ids)
             print(f"  ⏚ switchyard routes: {marks}")
             print("    switch with /model <route> — provider picker below")

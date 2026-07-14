@@ -138,7 +138,7 @@ def register(ctx):
             check(swc.decisions(root) is not None,
                   "decisions endpoint (/v1/routing/decisions — needs deterministic profile)",
                   optional=True)
-        check(routed, "this session routes through switchyard (green model name)", optional=True)
+        check(routed, "switchyard model selected — UX active (green model name, footer)", optional=True)
         check(ref is not None and hasattr(ref, "_sw_switch_route"),
               "footer grafted into this session", optional=True)
         lines.append(f"  {d}footer mode: {sw_settings.load_mode()}{r}")

@@ -1,7 +1,7 @@
 ---
 name: nemo-switchyard
 description: "Set up and use the NeMo Switchyard integration for Hermes Agent: install the plugin and nvhermes launcher, then read live routing usage via the footer, /nvusage, and /usage."
-version: 0.3.0
+version: 0.3.1
 author: PicoNVIDIA
 license: MIT
 platforms: [linux, macos]
@@ -109,11 +109,11 @@ SWITCHYARD_URL=http://127.0.0.1:<port> <plugin-dir>/scripts/doctor.sh  # every r
 started; route a session with `hermes --provider switchyard -m switchyard`,
 or pick `switchyard` in `/model` once — Hermes persists the choice, so
 plain `hermes` stays routed (and `/model` switches back anytime); the
-footer and green model name appear automatically in routed sessions —
-unrouted sessions look completely stock; one model, the router picks the
-tier per request (pin a specific upstream anytime from the catalog in
-`/model`); `/switchyard` is the control panel; `/switchyard footer` cycles
-footer styles; `/switchyard usage` or `/usage` show routing stats.
+footer and green model name appear exactly while the selected `/model` is a
+switchyard route — pin a catalog model or switch providers and the TUI goes
+back to completely stock; `/switchyard` is the control panel;
+`/switchyard footer` cycles footer styles; `/switchyard usage` or `/usage`
+show routing stats.
 
 ## Using it
 

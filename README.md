@@ -4,9 +4,9 @@ Live [NeMo Switchyard](https://github.com/NVIDIA-NeMo/Switchyard) routing
 visibility inside [Hermes Agent](https://github.com/NousResearch/hermes-agent) —
 in the stock `hermes` command, no wrapper needed: a live footer with
 request/token/cost totals and the served model, the `/switchyard` hub, a
-switchyard section in the native `/usage`, and the model name in NVIDIA green
-while your session routes through Switchyard. Unrouted sessions look
-completely stock.
+switchyard section in the native `/usage`, and the model name in NVIDIA green.
+The whole UX appears exactly while your `/model` is a switchyard route — pin
+a catalog model or switch providers and the TUI is completely stock again.
 
 ## Quick start
 
@@ -96,3 +96,4 @@ responses carry no token usage.
 - 0.2.0 — /switchyard hub: control panel, config builder (init), router start/stop, provider connect (routes in /model picker), route switching
 - 0.2.1 — agent-driven setup: sw_config.py shell CLI (init/start/stop/connect/disconnect/status), interview-style SKILL.md, key fallback to ~/.hermes/.env for env-scrubbed agent shells
 - 0.3.0 — one model ("switchyard") instead of auto/strong/weak; footer grafted into plain hermes at plugin load (nvhermes wrapper now optional)
+- 0.3.1 — UX gated on the selected /model being a switchyard route, re-checked live: pin a catalog model or switch providers and the TUI is stock again; /model switchyard brings it back
