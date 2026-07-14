@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# nvhermes — Hermes Agent with the NeMo Switchyard footer.
+# Install: copy to ~/.local/bin/nvhermes && chmod +x ~/.local/bin/nvhermes
+set -u
+unset PYTHONPATH PYTHONHOME 2>/dev/null || true
+
+HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+
+main_py=""
+for cand in "$HERMES_HOME"/plugins/*/nvhermes_main.py; do
+  if [ -f "$cand" ]; then main_py="$cand"; break; fi
+done
+if [ -z "$main_py" ]; then
+  echo "nvhermes: nemo-switchyard plugin not found under $HERMES_HOME/plugins" >&2
+  echo "install it with: hermes plugins install PicoNVIDIA/meld --enable" >&2
+  exit 1
+fi
+
+py="$HERMES_HOME/hermes-agent/venv/bin/python3"
+if [ ! -x "$py" ]; then
+  # Fall back to the interpreter behind the `hermes` launcher script.
+  hermes_bin="$(command -v hermes || true)"
+  if [ -n "$hermes_bin" ]; then
+    target="$(sed -n 's/^exec "\([^"]*\)".*/\1/p' "$hermes_bin" | head -1)"
+    if [ -n "$target" ] && [ -x "$(dirname "$target")/python3" ]; then
+      py="$(dirname "$target")/python3"
+    fi
+  fi
+fi
+if [ ! -x "$py" ]; then py="$(command -v python3)"; fi
+
+exec "$py" "$main_py" "$@"
