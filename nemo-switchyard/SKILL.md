@@ -1,7 +1,7 @@
 ---
 name: nemo-switchyard
 description: "Set up and use the NeMo Switchyard integration for Hermes Agent: install the plugin and nvhermes launcher, then read live routing usage via the footer, /nvusage, and /usage."
-version: 0.2.1
+version: 0.2.2
 author: PicoNVIDIA
 license: MIT
 platforms: [linux, macos]
@@ -68,12 +68,13 @@ use defaults" is a valid answer):
   `anthropic`), weak `nvidia/nvidia/nemotron-3-ultra` (format `openai`).
 - Which inference endpoint and which **environment variable** holds its API
   key? Defaults: `https://inference-api.nvidia.com/v1` and `NVIDIA_API_KEY`.
-  Verify it is available: `test -n "$NVIDIA_API_KEY"` (agent shells are often
-  env-scrubbed, so also check for a `NVIDIA_API_KEY=` line in
-  `$HERMES_HOME/.env` — `sw_config.py start` reads that file as a fallback).
-  If it is in neither place, ask the user to add it to `~/.hermes/.env`
-  (chmod 600) or export it, and pause until they confirm. Never ask for the
-  key value in chat and never write it to any file yourself.
+  You never need to see or handle the key: `sw_config.py start` checks
+  availability itself and prints exactly what is missing if it cannot find
+  the variable. If it reports the variable unavailable, relay that message
+  to the user verbatim, pause until they confirm they have made it available
+  in whatever way they normally manage credentials, then retry. Never ask
+  for the key value in chat, never read it, never write key material to any
+  file.
 - Which port for the local router? Default `4100`. Verify it is free:
   `lsof -nP -iTCP:<port> -sTCP:LISTEN` must return nothing.
 - Where is the `switchyard` executable? Auto-detect first
