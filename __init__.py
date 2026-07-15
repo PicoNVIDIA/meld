@@ -367,6 +367,14 @@ def register(ctx):
         mode = (raw_args or "").strip().lower()
         return _footer("status" if mode == "" else mode)
 
+    # One-time first-run hint: fresh install, nothing configured yet.
+    try:
+        if not sw_config.CONFIG_PATH.exists() and not _load_settings().get("first_run_hint_shown"):
+            _save_setting("first_run_hint_shown", True)
+            print("⏚ nemo-switchyard installed — type /switchyard and press Enter on Quick setup (~30s)")
+    except Exception:
+        pass
+
     ctx.register_command(
         "switchyard",
         _handle_switchyard,

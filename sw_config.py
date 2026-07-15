@@ -466,6 +466,92 @@ def stop_router():
 
 
 # ---------------------------------------------------------------------------
+# one-shot setup — config → key preflight → router → provider, idempotent
+# ---------------------------------------------------------------------------
+
+def setup(progress=None):
+    """First-run (and re-run) setup in one call. Returns (ok, lines).
+
+    progress, when given, is called with each line as it happens so UIs can
+    stream the transcript. Existing config is kept; every step is safe to
+    repeat.
+    """
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import switchyard_client as swc
+
+    lines = []
+
+    def log(text):
+        lines.append(text)
+        if progress:
+            try:
+                progress(text)
+            except Exception:
+                pass
+
+    bin_path = find_switchyard_bin()
+    if not bin_path:
+        log("✗ switchyard executable not found — install NeMo Switchyard,")
+        log("  then set it once: /switchyard bin <path>  (or export SWITCHYARD_BIN)")
+        return False, lines
+    log(f"✓ switchyard bin: {bin_path}")
+
+    if CONFIG_PATH.exists():
+        opts = load_last_opts()
+        log("✓ config exists — keeping it")
+    else:
+        opts = dict(DEFAULTS)
+        write_config(opts)
+        log("✓ wrote default config (strong=opus 4.8 · weak=nemotron ultra)")
+
+    ok, report = preflight_report(preflight())
+    for line in report.splitlines():
+        log("  " + line)
+    if not ok:
+        log("✗ fix the failing keys above, then run setup again")
+        return False, lines
+
+    state = router_state()
+    port = str((state or {}).get("port") or opts.get("port", DEFAULTS["port"]))
+    if state and state.get("running"):
+        log(f"✓ router already running (pid {state['pid']}, port {port})")
+    else:
+        keys = config_key_envs(CONFIG_PATH)
+        started, msg = start_router(bin_path, CONFIG_PATH, opts.get("port", DEFAULTS["port"]),
+                                    keys[0] if keys else "")
+        if not started:
+            log("✗ " + msg)
+            return False, lines
+        port = str(opts.get("port", DEFAULTS["port"]))
+        log("⏳ router starting (~15s — it fetches the upstream catalog first)")
+        import urllib.request as _rq
+        deadline = time.time() + 75
+        while time.time() < deadline:
+            try:
+                _rq.urlopen(f"http://127.0.0.1:{port}/health", timeout=1)
+                break
+            except Exception:
+                time.sleep(2)
+        else:
+            log(f"✗ router not healthy after 75s — see {LOG_PATH}")
+            return False, lines
+        log(f"✓ router healthy on http://127.0.0.1:{port}")
+
+    root = swc.detect(f"http://127.0.0.1:{port}/v1", timeout=3.0)
+    if root:
+        rts, _default = swc.routes(root)
+        okc, msg = connect_provider(root + "/v1", [r["id"] for r in rts])
+        log(("✓ " if okc else "✗ ") + msg)
+    else:
+        log("✗ router up but fingerprint failed — check the port")
+        return False, lines
+
+    log("✓ all set — pick the model `switchyard` (/model switchyard)")
+    return True, lines
+
+
+# ---------------------------------------------------------------------------
 # CLI — lets agents (and humans) drive setup from the shell:
 #   python3 sw_config.py init [key=value ...]
 #   python3 sw_config.py start [bin=PATH] [config=PATH] [port=N]
@@ -515,6 +601,10 @@ def _cli(argv):
         cfg = rest[0] if rest else None
         ok, report = preflight_report(preflight(cfg))
         return (0 if ok else 1), report
+
+    if cmd == "setup":
+        ok, lines = setup(progress=print)
+        return (0 if ok else 1), ""
 
     if cmd == "status":
         state = router_state()

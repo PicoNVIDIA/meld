@@ -1,7 +1,7 @@
 ---
 name: nemo-switchyard
 description: "Set up and use the NeMo Switchyard integration for Hermes Agent: install the plugin and nvhermes launcher, then read live routing usage via the footer, /nvusage, and /usage."
-version: 0.5.0
+version: 0.6.0
 author: PicoNVIDIA
 license: MIT
 platforms: [linux, macos]
@@ -30,6 +30,10 @@ routing visible inside Hermes:
 ## When to use
 
 - The user asks to set up / install the Switchyard integration for Hermes.
+- **Immediately after installing this skill or plugin for a user** — offer to
+  finish the setup right away rather than waiting to be asked. The whole
+  thing is one command (phase 3 below) or, for the user themselves, one
+  Enter on the `/switchyard` panel's Quick setup row.
 - The user asks how to see Switchyard usage, cost, or routing decisions.
 
 ## Setup procedure (for the agent)
@@ -85,23 +89,22 @@ use defaults" is a valid answer):
   provider list, removable with
   `python3 <plugin-dir>/sw_config.py disconnect`.
 
-**Phase 3 — build and start the router** (sw_config.py mirrors the
-/switchyard slash commands for shell use):
+**Phase 3 — one-shot setup** (config → key preflight → router → provider,
+idempotent; streams PASS/FAIL progress and exits non-zero on failure):
 
 ```
 python3 <plugin-dir>/sw_config.py init strong=<model> weak=<model> \
-    base_url=<endpoint> key_env=<VAR> port=<port>     # omit k=v pairs to keep defaults
-python3 <plugin-dir>/sw_config.py start [bin=<path-to-switchyard>]
+    base_url=<endpoint> key_env=<VAR> port=<port>   # only if the user customized anything
+python3 <plugin-dir>/sw_config.py setup
 ```
 
-Poll `curl -fsS http://127.0.0.1:<port>/health` until it returns
-`{"status":"ok"}` (typically ~15 s — the router fetches the upstream
-catalog first; check `~/.hermes/switchyard/router.log` if it takes longer).
+With defaults, `setup` alone is enough — it writes the default config when
+none exists. If it reports a missing/rejected key or missing switchyard
+binary, relay its message verbatim and pause for the user.
 
-**Phase 4 — connect and verify:**
+**Phase 4 — verify:**
 
 ```
-python3 <plugin-dir>/sw_config.py connect http://127.0.0.1:<port>/v1   # if the user said yes
 SWITCHYARD_URL=http://127.0.0.1:<port> <plugin-dir>/scripts/doctor.sh  # every required line PASS
 ```
 

@@ -15,20 +15,17 @@ hermes skills install PicoNVIDIA/meld/nemo-switchyard --category mlops   # the s
 # then tell your agent: "set up the switchyard integration"
 ```
 
-Or install directly, then let `/switchyard` do the rest from inside a session:
+Or install directly — first run is one Enter:
 
 ```bash
 hermes plugins install PicoNVIDIA/meld --enable
-hermes
+hermes                  # → "/switchyard" → Enter on the Quick setup row
 ```
 
-```
-/switchyard build       # interactive: pick strong/weak tiers from your connected models
-                        # (or /switchyard init for the non-interactive defaults:
-                        #  weak=nemotron ultra, strong=opus 4.8)
-/switchyard start       # run a local router with it (key env vars must be available)
-/switchyard connect     # register it as a hermes provider → shows in /model
-```
+Quick setup does everything (writes the default config, probes your keys,
+starts the router, registers the provider) with live progress in the panel.
+Prefer choosing your own tiers first? `/switchyard build` walks you through
+searchable pickers; `start`/`connect` remain as individual steps.
 
 `/switchyard build` walks you through Hermes's native model picker twice —
 strong tier, then weak — listing only connected providers Switchyard can call
@@ -116,3 +113,4 @@ responses carry no token usage.
 - 0.3.1 — UX gated on the selected /model being a switchyard route, re-checked live: pin a catalog model or switch providers and the TUI is stock again; /model switchyard brings it back
 - 0.4.0 — /switchyard build: interactive tier picker over your connected Hermes providers (native /model picker UI); per-tier endpoints/keys/formats in the generated config; multi-key router start
 - 0.5.0 — interactive everything: /switchyard opens an arrow-key panel (footer/router/provider toggles, tier pickers, preflight); type-to-search in model pickers; single-tier edits keep the rest of the config
+- 0.6.0 — first-run in one Enter: Quick setup row in the panel (config → keys → router → provider with live progress), sw_config.py setup one-shot for agents, one-time install hint

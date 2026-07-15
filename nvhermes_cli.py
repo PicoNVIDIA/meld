@@ -398,7 +398,7 @@ def _sw_register_picker_search(self, kb):
 # ↑/↓ move, Enter activates, ←/→ cycle the footer style, Esc closes.
 # Strong/weak rows open the searchable model picker for just that tier.
 
-_MENU_ITEMS = ("footer", "router", "provider", "strong", "weak", "save", "preflight", "route", "close")
+_MENU_ITEMS = ("setup", "footer", "router", "provider", "strong", "weak", "save", "preflight", "route", "close")
 
 
 def _sw_open_menu(self):
@@ -442,7 +442,11 @@ def _sw_menu_rows(self):
 
     n_pending = len(pending)
     save_val = f"{n_pending} unsaved change{'s' if n_pending != 1 else ''}" if n_pending else "—"
+    configured = sw_config.CONFIG_PATH.exists()
+    setup_val = "✓ configured" if (configured and running and connected) else (
+        "▶ press Enter — one-shot" if not configured else "▶ finish setup — Enter")
     return [
+        ("setup", "Quick setup", setup_val, "config → keys → router → provider"),
         ("footer", "Footer style", f"‹ {self._sw_footer_mode} ›", "←/→ cycles · applies live"),
         ("router", "Router", ("● running :%s" % port) if running else "○ stopped",
          "Enter stops it" if running else "Enter starts it"),
@@ -488,7 +492,7 @@ def _sw_menu_fragments(self):
         lines.append(("class:status-bar-nv", busy + " " * max(0, inner - len(busy) - 1)))
         lines.append(("class:clarify-border", " │\n"))
     if m.get("note"):
-        for note_line in str(m["note"]).splitlines()[:6]:
+        for note_line in str(m["note"]).splitlines()[-14:]:
             lines.append(("class:clarify-border", "│ "))
             txt = f"  {note_line}"[: inner - 2]
             lines.append(("class:clarify-hint", txt + " " * max(0, inner - len(txt) - 1)))
@@ -547,6 +551,24 @@ def _sw_menu_activate(self, direction=0):
         return
     key = _MENU_ITEMS[m.get("selected", 0) % len(_MENU_ITEMS)]
 
+    if key == "setup":
+        if direction:
+            return
+        def _setup():
+            def stream(line):
+                if self._sw_menu is not None:
+                    note = self._sw_menu.get("note") or ""
+                    self._sw_menu["note"] = (note + "\n" + line).strip()
+                try:
+                    self._invalidate(min_interval=0.0)
+                except Exception:
+                    pass
+            ok, _lines = sw_config.setup(progress=stream)
+            if self._sw_menu is not None and ok:
+                self._sw_menu["preflight"] = "✓ all pass"
+            return self._sw_menu.get("note") if self._sw_menu else ""
+        _sw_menu_run(self, "running quick setup…", _setup)
+        return
     if key == "footer":
         order = list(sw_settings.MODES)
         step = direction if direction else 1
