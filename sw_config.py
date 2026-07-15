@@ -364,12 +364,46 @@ def _pid_alive(pid):
 
 
 def router_state():
-    """{'pid', 'port', 'config', 'running': bool} or None if never started."""
+    """{'pid', 'port', 'config', 'running', 'stale'} or None if never started.
+
+    ``stale`` — the routes config on disk is newer than the running process,
+    i.e. saved changes are not applied until a restart.
+    """
     state = _read_state()
     if not state:
         return None
     state["running"] = _pid_alive(state.get("pid", -1))
+    stale = False
+    if state["running"]:
+        try:
+            stale = Path(state.get("config", CONFIG_PATH)).stat().st_mtime > float(
+                state.get("started_at", 0))
+        except Exception:
+            stale = False
+    state["stale"] = stale
     return state
+
+
+def restart_router():
+    """Stop the managed router, wait, start it on the current config.
+
+    Returns (ok, message)."""
+    state = router_state()
+    if state and state.get("running"):
+        ok, msg = stop_router()
+        if not ok:
+            return False, msg
+        deadline = time.time() + 15
+        while time.time() < deadline and _pid_alive(state.get("pid", -1)):
+            time.sleep(0.3)
+    bin_path = find_switchyard_bin()
+    if not bin_path:
+        return False, "switchyard executable not found — /switchyard bin <path>"
+    opts = load_last_opts()
+    keys = config_key_envs(CONFIG_PATH)
+    ok, msg = start_router(bin_path, CONFIG_PATH, opts.get("port", DEFAULTS["port"]),
+                           keys[0] if keys else "")
+    return ok, ("restarted with the saved config — " + msg if ok else msg)
 
 
 def _key_from_hermes_env_file(key_env):

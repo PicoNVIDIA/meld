@@ -445,11 +445,17 @@ def _sw_menu_rows(self):
     configured = sw_config.CONFIG_PATH.exists()
     setup_val = "✓ configured" if (configured and running and connected) else (
         "▶ press Enter — one-shot" if not configured else "▶ finish setup — Enter")
+    stale = bool(state and state.get("stale"))
+    if running and stale:
+        router_val, router_hint = f"● running :{port} — config changed", "Enter restarts to apply it"
+    elif running:
+        router_val, router_hint = f"● running :{port}", "Enter stops it"
+    else:
+        router_val, router_hint = "○ stopped", "Enter starts it"
     return [
         ("setup", "Quick setup", setup_val, "config → keys → router → provider"),
         ("footer", "Footer style", f"‹ {self._sw_footer_mode} ›", "←/→ cycles · applies live"),
-        ("router", "Router", ("● running :%s" % port) if running else "○ stopped",
-         "Enter stops it" if running else "Enter starts it"),
+        ("router", "Router", router_val, router_hint),
         ("provider", "Provider entry", "✓ connected" if connected else "— not connected",
          "Enter disconnects" if connected else "Enter connects (shows in /model)"),
         tier_row("strong", "Strong tier"),
@@ -603,7 +609,10 @@ def _sw_menu_activate(self, direction=0):
 
     if key == "router":
         state = sw_config.router_state()
-        if state and state.get("running"):
+        if state and state.get("running") and state.get("stale"):
+            _sw_menu_run(self, "restarting router with saved config…",
+                         lambda: sw_config.restart_router()[1])
+        elif state and state.get("running"):
             _sw_menu_run(self, "stopping router…", lambda: sw_config.stop_router()[1])
         else:
             def _start():
@@ -664,7 +673,7 @@ def _sw_menu_activate(self, direction=0):
                 self._sw_menu["preflight"] = "✓ all pass" if ok else "✗ failing — see note"
             state = sw_config.router_state()
             if state and state.get("running"):
-                report += "\nsaved ✓ — restart the router to apply (Router row: Enter twice)"
+                report += "\nsaved ✓ — Enter on the Router row restarts it with these changes"
             else:
                 report += "\nsaved ✓"
             return report
