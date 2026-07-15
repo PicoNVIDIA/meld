@@ -1,35 +1,42 @@
 # For agents — finish the install
 
 You are an AI agent and this plugin was just installed (or you were asked to
-install it). Finish the setup now — the user should only have to restart
-hermes afterwards.
+install it). Your job is **install + enable + hand off** — the setup itself
+is an interactive one-keystroke experience inside hermes that the user
+should get to see.
 
-1. If not yet installed:
+1. Install (idempotent):
 
    ```
    hermes plugins install PicoNVIDIA/meld --enable
    ```
 
-2. Run the one-shot setup and show the user its output:
+2. Verify it is **enabled** — `hermes plugins list` must say `enabled` for
+   `nemo-switchyard`. If it says `not enabled` (the installer's enable
+   prompt is a no-op in non-TTY shells), run:
 
    ```
-   python3 ~/.hermes/plugins/nemo-switchyard/sw_config.py setup
+   hermes plugins enable nemo-switchyard
    ```
 
-   (Use `$HERMES_HOME/plugins/...` if `HERMES_HOME` is set.) It is
-   idempotent: enables the plugin if the install skipped that, writes a
-   default routing config if none exists, probes the API keys with 1-token
-   requests, starts a local Switchyard router, and registers the
-   `switchyard` provider so it shows in `/model`. Every line starts with ✓
-   or ✗ — if the last line is not the "all set" line, something failed.
+3. Hand off with exactly this: **restart hermes** (plugins load at session
+   start). A `⏚ switchyard` hint line will appear above the status bar —
+   type `/switchyard` and press **Enter on the Quick setup row**. It does
+   everything (config, key preflight, local router, provider registration)
+   with live progress, in about 30 seconds. Then `/model switchyard` — the
+   live routing footer and green model name appear automatically.
 
-3. If setup reports a missing or rejected key, or a missing `switchyard`
-   executable, relay its message to the user verbatim and stop — never ask
-   for key values in chat, never read or write key material yourself.
+**Only if the user explicitly asks you to do the whole setup for them**
+(e.g. headless, or "set it all up"), run it yourself and show the output:
 
-4. Hand off with exactly this: **restart hermes** (plugins load at session
-   start), then `/model switchyard`. The live routing footer and green model
-   name appear automatically; `/switchyard` opens the control panel.
+```
+python3 ~/.hermes/plugins/nemo-switchyard/sw_config.py setup
+```
+
+(`$HERMES_HOME/plugins/...` if `HERMES_HOME` is set.) Idempotent; every
+line starts with ✓ or ✗. If it reports a missing or rejected key or a
+missing `switchyard` executable, relay the message verbatim and stop —
+never ask for key values in chat, never read or write key material.
 
 Custom tiers, the full interview flow, and troubleshooting live in
 [`nemo-switchyard/SKILL.md`](nemo-switchyard/SKILL.md).
