@@ -678,8 +678,23 @@ def _sw_infer_format(slug, base_url, model):
     return "openai"
 
 
+_SW_DEFAULTS_SLUG = "switchyard-default-endpoint"
+
+
+def _sw_key_value(key_env):
+    import sw_config
+    return os.environ.get(key_env) or sw_config._key_from_hermes_env_file(key_env)
+
+
 def _sw_builder_providers(self):
-    """Connected providers usable as Switchyard targets, in picker-row shape."""
+    """Connected providers usable as Switchyard targets, in picker-row shape.
+
+    Prepends the router config's default endpoint as its own row (it usually
+    isn't a Hermes provider but is exactly what the user's key works with),
+    and auth-probes each real provider so rows whose key the endpoint rejects
+    are visibly marked before the user picks a doomed model.
+    """
+    import sw_config
     from hermes_cli.inventory import build_models_payload, load_picker_context
 
     ctx = load_picker_context().with_overrides(
@@ -689,18 +704,45 @@ def _sw_builder_providers(self):
     )
     payload = build_models_payload(ctx, include_unconfigured=False, picker_hints=True)
     rows, skipped = [], []
+
+    opts = sw_config.load_last_opts()
+    default_url = opts.get("base_url", "")
+    default_key = _sw_key_value(opts.get("key_env", ""))
+    if default_url and default_key:
+        ids = swc.list_models(default_url, default_key)
+        if ids:
+            host = default_url.split("//")[-1].split("/")[0]
+            rows.append({
+                "slug": _SW_DEFAULTS_SLUG,
+                "name": f"Default endpoint · {host}",
+                "models": ids,
+                "total_models": len(ids),
+                "is_current": False,
+                "authenticated": True,
+            })
+
     for row in payload.get("providers") or []:
         slug = row.get("slug") or ""
         if slug == "switchyard":
             continue
         base_url, key_env = _sw_provider_endpoint(
             self, slug, ctx.user_providers, ctx.custom_providers)
-        if base_url and key_env:
-            row = dict(row)
-            row["is_current"] = False
-            rows.append(row)
-        else:
+        if not (base_url and key_env):
             skipped.append(slug)
+            continue
+        row = dict(row)
+        row["is_current"] = False
+        key_value = _sw_key_value(key_env)
+        first_model = next(iter(row.get("models") or []), None)
+        if not key_value:
+            row["name"] = f"{row.get('name', slug)} ⚠ ${key_env} not set"
+        elif first_model:
+            code = swc.probe_upstream(
+                base_url, key_value, first_model,
+                _sw_infer_format(slug, base_url, first_model), timeout=8.0)
+            if code in (401, 403):
+                row["name"] = f"{row.get('name', slug)} ⚠ key fails here"
+        rows.append(row)
     return rows, skipped, ctx
 
 
@@ -746,15 +788,23 @@ def _sw_builder_open_picker(self):
 
 def _sw_builder_capture(self, provider_data, chosen_model):
     """A model was picked inside the wizard. Advance or finish."""
+    import sw_config
     b = self._sw_builder
     b["picking"] = False
     slug = provider_data.get("slug") or ""
-    base_url, key_env = _sw_provider_endpoint(
-        self, slug, getattr(b["ctx"], "user_providers", None),
-        getattr(b["ctx"], "custom_providers", None))
+    if slug == _SW_DEFAULTS_SLUG:
+        opts = b["opts"]
+        base_url, key_env = opts.get("base_url"), opts.get("key_env")
+        fmt = "anthropic" if "claude" in chosen_model.lower() else "openai"
+        slug = "default endpoint"
+    else:
+        base_url, key_env = _sw_provider_endpoint(
+            self, slug, getattr(b["ctx"], "user_providers", None),
+            getattr(b["ctx"], "custom_providers", None))
+        fmt = _sw_infer_format(slug, base_url, chosen_model)
     pick = {"model": chosen_model, "slug": slug,
             "base_url": base_url, "key_env": key_env,
-            "format": _sw_infer_format(slug, base_url, chosen_model)}
+            "format": fmt}
     step = b["step"]
     b["picks"][step] = pick
     if step == "strong" and not b.get("only_tier"):

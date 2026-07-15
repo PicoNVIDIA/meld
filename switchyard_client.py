@@ -121,6 +121,18 @@ def reset(root, timeout=2.0):
     return _get_json(root + "/v1/stats/reset", timeout=timeout, method="POST")
 
 
+def list_models(base_url, api_key, timeout=6.0):
+    """Model ids from an OpenAI-compatible endpoint (auth'd GET /models)."""
+    url = (base_url or "").rstrip("/") + "/models"
+    try:
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+        return [m.get("id") for m in (data.get("data") or []) if isinstance(m, dict) and m.get("id")]
+    except Exception:
+        return []
+
+
 def probe_upstream(base_url, api_key, model, fmt="openai", timeout=15.0):
     """Auth preflight: a 1-token chat completion against the endpoint.
 
