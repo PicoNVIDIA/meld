@@ -398,7 +398,7 @@ def _sw_register_picker_search(self, kb):
 # ↑/↓ move, Enter activates, ←/→ cycle the footer style, Esc closes.
 # Strong/weak rows open the searchable model picker for just that tier.
 
-_MENU_ITEMS = ("footer", "router", "provider", "strong", "weak", "preflight", "route", "close")
+_MENU_ITEMS = ("footer", "router", "provider", "strong", "weak", "save", "preflight", "route", "close")
 
 
 def _sw_open_menu(self):
@@ -430,20 +430,32 @@ def _sw_menu_rows(self):
     except Exception:
         pass
     m = self._sw_menu or {}
+    pending = m.get("pending") or {}
     pf = m.get("preflight")
     pf_label = "press Enter to check keys" if pf is None else pf
+
+    def tier_row(tier, label):
+        pick = pending.get(tier)
+        if pick:
+            return (tier, label, f"● {swc.short_model(pick['model'])}", "unsaved — Save changes")
+        return (tier, label, swc.short_model(opts.get(tier, "")), "Enter → searchable picker")
+
+    n_pending = len(pending)
+    save_val = f"{n_pending} unsaved change{'s' if n_pending != 1 else ''}" if n_pending else "—"
     return [
         ("footer", "Footer style", f"‹ {self._sw_footer_mode} ›", "←/→ cycles · applies live"),
         ("router", "Router", ("● running :%s" % port) if running else "○ stopped",
          "Enter stops it" if running else "Enter starts it"),
         ("provider", "Provider entry", "✓ connected" if connected else "— not connected",
          "Enter disconnects" if connected else "Enter connects (shows in /model)"),
-        ("strong", "Strong tier", swc.short_model(opts.get("strong", "")), "Enter → searchable picker"),
-        ("weak", "Weak tier", swc.short_model(opts.get("weak", "")), "Enter → searchable picker"),
+        tier_row("strong", "Strong tier"),
+        tier_row("weak", "Weak tier"),
+        ("save", "Save changes", save_val,
+         "writes config + key preflight" if n_pending else "pick a tier first"),
         ("preflight", "Key preflight", pf_label, "1-token probe per tier"),
         ("route", "Use switchyard", "route this session" if self.model != "switchyard" else "▶ current model",
          "Enter → /model switchyard"),
-        ("close", "Close", "", "Esc"),
+        ("close", "Close", "", "Esc discards unsaved picks"),
     ]
 
 
@@ -584,9 +596,40 @@ def _sw_menu_activate(self, direction=0):
                 return sw_config.connect_provider(root + "/v1", [r["id"] for r in rts])[1]
             _sw_menu_run(self, "connecting…", _connect)
     elif key in ("strong", "weak"):
-        _sw_close_menu(self)
-        msg = _sw_start_builder(self, "", only_tier=key)
-        print(msg)
+        msg = _sw_start_builder(self, "", only_tier=key, menu_mode=True)
+        if msg:
+            m["note"] = msg
+        try:
+            self._invalidate(min_interval=0.0)
+        except Exception:
+            pass
+    elif key == "save":
+        pending = dict(m.get("pending") or {})
+        if not pending:
+            m["note"] = "no unsaved tier picks — select Strong or Weak tier first"
+            return
+
+        def _apply():
+            opts = sw_config.load_last_opts()
+            for tier, pick in pending.items():
+                opts.update({
+                    tier: pick["model"], f"{tier}_format": pick["format"],
+                    f"{tier}_base_url": pick["base_url"],
+                    f"{tier}_key_env": pick["key_env"],
+                })
+            sw_config.write_config(opts)
+            ok, report = sw_config.preflight_report(sw_config.preflight())
+            if self._sw_menu is not None:
+                self._sw_menu["pending"] = {}
+                self._sw_menu["preflight"] = "✓ all pass" if ok else "✗ failing — see note"
+            state = sw_config.router_state()
+            if state and state.get("running"):
+                report += "\nsaved ✓ — restart the router to apply (Router row: Enter twice)"
+            else:
+                report += "\nsaved ✓"
+            return report
+
+        _sw_menu_run(self, "saving config + key preflight…", _apply)
     elif key == "preflight":
         def _pf():
             ok, report = sw_config.preflight_report(sw_config.preflight())
@@ -746,7 +789,7 @@ def _sw_builder_providers(self):
     return rows, skipped, ctx
 
 
-def _sw_start_builder(self, raw_args="", only_tier=None):
+def _sw_start_builder(self, raw_args="", only_tier=None, menu_mode=False):
     import sw_config
     base_opts = sw_config.load_last_opts() if only_tier else None
     opts, unknown = sw_config.parse_kv(raw_args)
@@ -765,9 +808,11 @@ def _sw_start_builder(self, raw_args="", only_tier=None):
                 f"(skipped: {', '.join(skipped) or 'none'})")
     self._sw_builder = {"step": only_tier or "strong", "opts": opts, "rows": rows,
                         "ctx": ctx, "picking": False, "picks": {},
-                        "only_tier": only_tier}
-    note = f"  (skipped, no direct API key: {', '.join(skipped)})\n" if skipped else ""
+                        "only_tier": only_tier, "menu_mode": menu_mode}
     _sw_builder_open_picker(self)
+    if menu_mode:
+        return ""  # picker title carries the tier; pick returns to the panel
+    note = f"  (skipped, no direct API key: {', '.join(skipped)})\n" if skipped else ""
     tier_word = (only_tier or "strong").upper()
     return (f"⏚ switchyard build — pick the {tier_word} tier model — type to search 🔎\n{note}"
             "  ↑/↓ + Enter selects; Backspace edits the search; Cancel aborts")
@@ -806,6 +851,16 @@ def _sw_builder_capture(self, provider_data, chosen_model):
             "base_url": base_url, "key_env": key_env,
             "format": fmt}
     step = b["step"]
+    if b.get("menu_mode"):
+        self._sw_builder = None
+        if self._sw_menu is not None:
+            self._sw_menu.setdefault("pending", {})[step] = pick
+            self._sw_menu["note"] = ""
+        try:
+            self._invalidate(min_interval=0.0)
+        except Exception:
+            pass
+        return
     b["picks"][step] = pick
     if step == "strong" and not b.get("only_tier"):
         b["step"] = "weak"
@@ -869,8 +924,17 @@ def _sw_builder_finish(self):
         pass
 
 
-def _sw_builder_abort(self, reason="cancelled"):
+def _sw_builder_abort(self, b=None, reason="cancelled"):
+    menu_mode = bool(((b or getattr(self, "_sw_builder", None)) or {}).get("menu_mode"))
     self._sw_builder = None
+    if menu_mode:
+        if self._sw_menu is not None:
+            self._sw_menu["note"] = "tier pick cancelled"
+        try:
+            self._invalidate(min_interval=0.0)
+        except Exception:
+            pass
+        return
     print(f"  ⏚ switchyard build {reason} — run /switchyard build to restart")
 
 
@@ -976,7 +1040,7 @@ def graft():
         orig_close_picker(self)
         if b and b.get("picking"):
             try:
-                _sw_builder_abort(self)
+                _sw_builder_abort(self, b)
             except Exception:
                 self._sw_builder = None
 
