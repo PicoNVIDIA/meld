@@ -865,8 +865,9 @@ def graft():
             return widgets
         try:
             _sw_ensure_init(self)
-            widgets.append(_sw_extra_row_widget(self))
+            # panel first so the ⏚ row stays glued to the status bar below it
             widgets.append(_sw_menu_widget(self))
+            widgets.append(_sw_extra_row_widget(self))
         except Exception:
             pass
         return widgets
@@ -984,8 +985,8 @@ class SwitchyardCLI(_HermesCLI):
     def _get_extra_tui_widgets(self):
         widgets = list(super()._get_extra_tui_widgets())
         try:
-            widgets.append(_sw_extra_row_widget(self))
             widgets.append(_sw_menu_widget(self))
+            widgets.append(_sw_extra_row_widget(self))
         except Exception:
             pass
         return widgets
