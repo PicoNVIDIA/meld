@@ -55,6 +55,7 @@ def _sw_ensure_init(self):
     self._sw_snapshot = None
     self._sw_decisions = None
     self._sw_footer_mode = sw_settings.load_mode()
+    self._sw_menu = None
     self._sw_detect_cache = {}
     self._sw_routes_cache = (None, [], 0.0)
     threading.Thread(target=_sw_poll_loop, args=(self,),
@@ -332,6 +333,310 @@ def _sw_model_switch_preamble(self, cmd_original):
     return False
 
 
+# ── type-to-search in the model picker ──────────────────────────────────────
+#
+# While the picker shows a model list in a grafted session, printable keys
+# build a filter query (shown in the panel title as "🔎 query"), Backspace
+# edits it, and the list narrows live. Matching is token-substring: every
+# whitespace-separated token must appear somewhere in the model id.
+
+def _sw_picker_filter_apply(self):
+    state = self._model_picker_state
+    if not state or state.get("stage") != "model":
+        return
+    full = state.get("sw_full_list")
+    if full is None:
+        full = list(state.get("model_list") or [])
+        state["sw_full_list"] = full
+        pd = state.get("provider_data") or {}
+        state["sw_orig_name"] = pd.get("name", pd.get("slug", "Provider"))
+    query = state.get("sw_query", "")
+    tokens = query.lower().split()
+    state["model_list"] = [m for m in full
+                           if all(t in m.lower() for t in tokens)] if tokens else list(full)
+    state["selected"] = 0
+    state["_scroll_offset"] = 0
+    pd = state.get("provider_data")
+    if isinstance(pd, dict):
+        base = state.get("sw_orig_name", "Provider")
+        pd["name"] = f"{base}  🔎 {query}" if query else base
+    try:
+        self._invalidate(min_interval=0.0)
+    except Exception:
+        pass
+
+
+def _sw_register_picker_search(self, kb):
+    from prompt_toolkit.filters import Condition
+    from prompt_toolkit.keys import Keys
+
+    def _searchable():
+        state = getattr(self, "_model_picker_state", None)
+        return bool(state) and state.get("stage") == "model"
+
+    @kb.add(Keys.Any, filter=Condition(_searchable))
+    def _sw_type(event):
+        ch = event.data or ""
+        if not ch or not ch.isprintable():
+            return
+        state = self._model_picker_state
+        state["sw_query"] = state.get("sw_query", "") + ch
+        _sw_picker_filter_apply(self)
+
+    @kb.add("backspace", filter=Condition(_searchable))
+    def _sw_backspace(event):
+        state = self._model_picker_state
+        q = state.get("sw_query", "")
+        if q:
+            state["sw_query"] = q[:-1]
+            _sw_picker_filter_apply(self)
+
+
+# ── interactive control panel (/switchyard) ────────────────────────────────
+#
+# Arrow-key panel in the same visual language as the native pickers:
+# ↑/↓ move, Enter activates, ←/→ cycle the footer style, Esc closes.
+# Strong/weak rows open the searchable model picker for just that tier.
+
+_MENU_ITEMS = ("footer", "router", "provider", "strong", "weak", "preflight", "route", "close")
+
+
+def _sw_open_menu(self):
+    _sw_ensure_init(self)
+    self._sw_menu = {"selected": 0, "busy": "", "note": "", "preflight": None}
+    try:
+        self._invalidate(min_interval=0.0)
+    except Exception:
+        pass
+
+
+def _sw_close_menu(self):
+    self._sw_menu = None
+    try:
+        self._invalidate(min_interval=0.0)
+    except Exception:
+        pass
+
+
+def _sw_menu_rows(self):
+    import sw_config
+    opts = sw_config.load_last_opts()
+    state = sw_config.router_state()
+    running = bool(state and state.get("running"))
+    port = (state or {}).get("port") or opts.get("port")
+    connected = False
+    try:
+        connected = "switchyard" in (sw_config.HERMES_CONFIG.read_text())
+    except Exception:
+        pass
+    m = self._sw_menu or {}
+    pf = m.get("preflight")
+    pf_label = "press Enter to check keys" if pf is None else pf
+    return [
+        ("footer", "Footer style", f"‹ {self._sw_footer_mode} ›", "←/→ cycles · applies live"),
+        ("router", "Router", ("● running :%s" % port) if running else "○ stopped",
+         "Enter stops it" if running else "Enter starts it"),
+        ("provider", "Provider entry", "✓ connected" if connected else "— not connected",
+         "Enter disconnects" if connected else "Enter connects (shows in /model)"),
+        ("strong", "Strong tier", swc.short_model(opts.get("strong", "")), "Enter → searchable picker"),
+        ("weak", "Weak tier", swc.short_model(opts.get("weak", "")), "Enter → searchable picker"),
+        ("preflight", "Key preflight", pf_label, "1-token probe per tier"),
+        ("route", "Use switchyard", "route this session" if self.model != "switchyard" else "▶ current model",
+         "Enter → /model switchyard"),
+        ("close", "Close", "", "Esc"),
+    ]
+
+
+def _sw_menu_fragments(self):
+    m = self._sw_menu
+    if not m:
+        return []
+    rows = _sw_menu_rows(self)
+    title = "⏚ Switchyard"
+    label_w = max(len(r[1]) for r in rows)
+    value_w = max(len(r[2]) for r in rows)
+    inner = max(52, max(2 + label_w + 2 + value_w + 2 + len(r[3]) + 3 for r in rows))
+    lines = [("class:clarify-border", "╭─ "), ("class:status-bar-nv", title),
+             ("class:clarify-border", " " + "─" * max(0, inner - len(title) - 3) + "╮\n")]
+
+    def put(style_label, label, value, hint, selected):
+        prefix = "❯ " if selected else "  "
+        text = f"{prefix}{label:<{label_w}}  {value:<{value_w}}  "
+        lines.append(("class:clarify-border", "│ "))
+        lines.append(("class:clarify-selected" if selected else style_label, text))
+        pad = inner - len(text) - len(hint) - 3
+        lines.append(("class:clarify-hint", hint + " " * max(0, pad)))
+        lines.append(("class:clarify-border", " │\n"))
+
+    for i, (key, label, value, hint) in enumerate(rows):
+        put("class:clarify-choice", label, value, hint, i == m.get("selected", 0))
+    if m.get("busy"):
+        lines.append(("class:clarify-border", "│ "))
+        busy = f"  ⏳ {m['busy']}"
+        lines.append(("class:status-bar-nv", busy + " " * max(0, inner - len(busy) - 1)))
+        lines.append(("class:clarify-border", " │\n"))
+    if m.get("note"):
+        for note_line in str(m["note"]).splitlines()[:6]:
+            lines.append(("class:clarify-border", "│ "))
+            txt = f"  {note_line}"[: inner - 2]
+            lines.append(("class:clarify-hint", txt + " " * max(0, inner - len(txt) - 1)))
+            lines.append(("class:clarify-border", " │\n"))
+    lines.append(("class:clarify-border", "╰" + "─" * inner + "╯\n"))
+    return lines
+
+
+def _sw_menu_widget(self):
+    from prompt_toolkit.filters import Condition
+    from prompt_toolkit.layout import ConditionalContainer, FormattedTextControl, Window
+    return ConditionalContainer(
+        Window(FormattedTextControl(lambda: _sw_menu_fragments(self)), wrap_lines=True),
+        filter=Condition(lambda: getattr(self, "_sw_menu", None) is not None
+                         and not getattr(self, "_model_picker_state", None)),
+    )
+
+
+def _sw_menu_run(self, label, fn):
+    """Run a slow action off the render thread, updating the busy line."""
+    m = self._sw_menu
+    if m is None or m.get("busy"):
+        return
+
+    def worker():
+        mm = self._sw_menu
+        try:
+            note = fn()
+            if self._sw_menu is not None:
+                self._sw_menu["note"] = note or ""
+        except Exception as exc:
+            if self._sw_menu is not None:
+                self._sw_menu["note"] = f"error: {exc}"
+        finally:
+            if self._sw_menu is not None:
+                self._sw_menu["busy"] = ""
+            try:
+                self._invalidate(min_interval=0.0)
+            except Exception:
+                pass
+
+    m["busy"] = label
+    m["note"] = ""
+    threading.Thread(target=worker, daemon=True).start()
+    try:
+        self._invalidate(min_interval=0.0)
+    except Exception:
+        pass
+
+
+def _sw_menu_activate(self, direction=0):
+    import sw_config
+    import sw_settings
+    m = self._sw_menu
+    if not m:
+        return
+    key = _MENU_ITEMS[m.get("selected", 0) % len(_MENU_ITEMS)]
+
+    if key == "footer":
+        order = list(sw_settings.MODES)
+        step = direction if direction else 1
+        mode = order[(order.index(self._sw_footer_mode) + step) % len(order)]
+        sw_settings.save_mode(mode)
+        self._sw_footer_mode = mode
+        try:
+            self._invalidate(min_interval=0.0)
+        except Exception:
+            pass
+        return
+    if direction:  # ←/→ only means something on the footer row
+        return
+
+    if key == "router":
+        state = sw_config.router_state()
+        if state and state.get("running"):
+            _sw_menu_run(self, "stopping router…", lambda: sw_config.stop_router()[1])
+        else:
+            def _start():
+                bin_path = sw_config.find_switchyard_bin()
+                if not bin_path:
+                    return "switchyard bin not found — /switchyard bin <path>"
+                opts = sw_config.load_last_opts()
+                if not sw_config.CONFIG_PATH.exists():
+                    sw_config.write_config(opts)
+                keys = sw_config.config_key_envs(sw_config.CONFIG_PATH)
+                return sw_config.start_router(bin_path, sw_config.CONFIG_PATH,
+                                              opts.get("port", "4100"),
+                                              keys[0] if keys else "")[1]
+            _sw_menu_run(self, "starting router…", _start)
+    elif key == "provider":
+        try:
+            connected = "switchyard" in sw_config.HERMES_CONFIG.read_text()
+        except Exception:
+            connected = False
+        if connected:
+            _sw_menu_run(self, "disconnecting…", lambda: sw_config.disconnect_provider()[1])
+        else:
+            def _connect():
+                state = sw_config.router_state()
+                port = (state or {}).get("port") or sw_config.load_last_opts().get("port")
+                root = swc.detect(f"http://127.0.0.1:{port}/v1", timeout=2.0)
+                if not root:
+                    return f"no switchyard router on :{port} — start it first"
+                rts, _d = swc.routes(root)
+                return sw_config.connect_provider(root + "/v1", [r["id"] for r in rts])[1]
+            _sw_menu_run(self, "connecting…", _connect)
+    elif key in ("strong", "weak"):
+        _sw_close_menu(self)
+        msg = _sw_start_builder(self, "", only_tier=key)
+        print(msg)
+    elif key == "preflight":
+        def _pf():
+            ok, report = sw_config.preflight_report(sw_config.preflight())
+            if self._sw_menu is not None:
+                self._sw_menu["preflight"] = "✓ all pass" if ok else "✗ failing — see note"
+            return report
+        _sw_menu_run(self, "probing upstream keys…", _pf)
+    elif key == "route":
+        _sw_close_menu(self)
+        print("  " + _sw_switch_route(self, "switchyard"))
+    elif key == "close":
+        _sw_close_menu(self)
+
+
+def _sw_register_menu_keys(self, kb):
+    from prompt_toolkit.filters import Condition
+
+    def _menu_open():
+        return (getattr(self, "_sw_menu", None) is not None
+                and not getattr(self, "_model_picker_state", None))
+
+    cond = Condition(_menu_open)
+
+    @kb.add("up", filter=cond)
+    def _up(event):
+        self._sw_menu["selected"] = (self._sw_menu.get("selected", 0) - 1) % len(_MENU_ITEMS)
+        self._invalidate(min_interval=0.0)
+
+    @kb.add("down", filter=cond)
+    def _down(event):
+        self._sw_menu["selected"] = (self._sw_menu.get("selected", 0) + 1) % len(_MENU_ITEMS)
+        self._invalidate(min_interval=0.0)
+
+    @kb.add("enter", filter=cond)
+    def _enter(event):
+        _sw_menu_activate(self)
+
+    @kb.add("left", filter=cond)
+    def _left(event):
+        _sw_menu_activate(self, direction=-1)
+
+    @kb.add("right", filter=cond)
+    def _right(event):
+        _sw_menu_activate(self, direction=1)
+
+    @kb.add("escape", filter=cond)
+    def _esc(event):
+        _sw_close_menu(self)
+
+
 # ── /switchyard build — interactive wizard over the native model picker ────
 #
 # Reuses Hermes's own /model picker modal twice (strong tier, then weak),
@@ -399,9 +704,13 @@ def _sw_builder_providers(self):
     return rows, skipped, ctx
 
 
-def _sw_start_builder(self, raw_args=""):
+def _sw_start_builder(self, raw_args="", only_tier=None):
     import sw_config
+    base_opts = sw_config.load_last_opts() if only_tier else None
     opts, unknown = sw_config.parse_kv(raw_args)
+    if base_opts:
+        base_opts.update({k: v for k, v in opts.items() if v != sw_config.DEFAULTS.get(k)})
+        opts = base_opts
     if unknown:
         return "unrecognized: " + " ".join(unknown) + " — usage: /switchyard build [port=N ...]"
     try:
@@ -412,12 +721,14 @@ def _sw_start_builder(self, raw_args=""):
         return ("no connected providers usable as switchyard targets — "
                 "switchyard needs providers with a base_url and an API-key env var "
                 f"(skipped: {', '.join(skipped) or 'none'})")
-    self._sw_builder = {"step": "strong", "opts": opts, "rows": rows,
-                        "ctx": ctx, "picking": False, "picks": {}}
+    self._sw_builder = {"step": only_tier or "strong", "opts": opts, "rows": rows,
+                        "ctx": ctx, "picking": False, "picks": {},
+                        "only_tier": only_tier}
     note = f"  (skipped, no direct API key: {', '.join(skipped)})\n" if skipped else ""
     _sw_builder_open_picker(self)
-    return (f"⏚ switchyard build — pick the STRONG tier model (hard requests)\n{note}"
-            "  use ↑/↓ + Enter in the picker; Cancel aborts the build")
+    tier_word = (only_tier or "strong").upper()
+    return (f"⏚ switchyard build — pick the {tier_word} tier model — type to search 🔎\n{note}"
+            "  ↑/↓ + Enter selects; Backspace edits the search; Cancel aborts")
 
 
 def _sw_builder_open_picker(self):
@@ -446,13 +757,13 @@ def _sw_builder_capture(self, provider_data, chosen_model):
             "format": _sw_infer_format(slug, base_url, chosen_model)}
     step = b["step"]
     b["picks"][step] = pick
-    if step == "strong":
+    if step == "strong" and not b.get("only_tier"):
         b["step"] = "weak"
         print(f"  ✓ strong: {chosen_model}  ({slug})")
-        print("  ⏚ now pick the WEAK tier model (cheap/fast requests)")
+        print("  ⏚ now pick the WEAK tier model (cheap/fast requests) — type to search 🔎")
         _sw_builder_open_picker(self)
         return
-    print(f"  ✓ weak: {chosen_model}  ({slug})")
+    print(f"  ✓ {step}: {chosen_model}  ({slug})")
     _sw_builder_finish(self)
 
 
@@ -460,14 +771,23 @@ def _sw_builder_finish(self):
     import sw_config
     b = self._sw_builder
     self._sw_builder = None
-    strong, weak = b["picks"]["strong"], b["picks"]["weak"]
     opts = dict(b["opts"])
-    opts.update({
-        "strong": strong["model"], "strong_format": strong["format"],
-        "strong_base_url": strong["base_url"], "strong_key_env": strong["key_env"],
-        "weak": weak["model"], "weak_format": weak["format"],
-        "weak_base_url": weak["base_url"], "weak_key_env": weak["key_env"],
-    })
+    for tier in ("strong", "weak"):
+        pick = b["picks"].get(tier)
+        if not pick:
+            continue  # single-tier edit keeps the other tier as-is
+        opts.update({
+            tier: pick["model"], f"{tier}_format": pick["format"],
+            f"{tier}_base_url": pick["base_url"], f"{tier}_key_env": pick["key_env"],
+        })
+    strong = b["picks"].get("strong") or {
+        "model": opts["strong"], "slug": "kept", "format": opts["strong_format"],
+        "key_env": opts.get("strong_key_env") or opts["key_env"],
+        "base_url": opts.get("strong_base_url") or opts["base_url"]}
+    weak = b["picks"].get("weak") or {
+        "model": opts["weak"], "slug": "kept", "format": opts["weak_format"],
+        "key_env": opts.get("weak_key_env") or opts["key_env"],
+        "base_url": opts.get("weak_base_url") or opts["base_url"]}
     if b["opts"].get("classifier") == sw_config.DEFAULTS["classifier"] and \
             weak["base_url"] != sw_config.DEFAULTS["base_url"]:
         # Default classifier lives on the NVIDIA endpoint; when the weak tier
@@ -546,6 +866,7 @@ def graft():
         try:
             _sw_ensure_init(self)
             widgets.append(_sw_extra_row_widget(self))
+            widgets.append(_sw_menu_widget(self))
         except Exception:
             pass
         return widgets
@@ -608,6 +929,16 @@ def graft():
             except Exception:
                 self._sw_builder = None
 
+    orig_keys = base._register_extra_tui_keybindings
+
+    def patched_keys(self, kb, *, input_area):
+        orig_keys(self, kb, input_area=input_area)
+        try:
+            _sw_register_picker_search(self, kb)
+            _sw_register_menu_keys(self, kb)
+        except Exception:
+            pass
+
     base._get_status_bar_fragments = patched_frags
     base._get_extra_tui_widgets = patched_widgets
     base._build_tui_style_dict = patched_styles
@@ -615,8 +946,10 @@ def graft():
     base._handle_model_switch = patched_model
     base._handle_model_picker_selection = patched_pick
     base._close_model_picker = patched_close_picker
+    base._register_extra_tui_keybindings = patched_keys
     base._sw_switch_route = _sw_switch_route
     base._sw_start_builder = _sw_start_builder
+    base._sw_open_menu = _sw_open_menu
     base._sw_grafted = True
     return True
 
@@ -652,6 +985,7 @@ class SwitchyardCLI(_HermesCLI):
         widgets = list(super()._get_extra_tui_widgets())
         try:
             widgets.append(_sw_extra_row_widget(self))
+            widgets.append(_sw_menu_widget(self))
         except Exception:
             pass
         return widgets

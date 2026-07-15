@@ -48,8 +48,15 @@ hermes --provider openrouter -m switchyard`.)
 
 ## The /switchyard hub
 
+`/switchyard` opens an **interactive panel** — ↑/↓ to move, Enter to act,
+←/→ to cycle the footer style, Esc to close: toggle the router on/off,
+connect/disconnect the provider, re-pick the strong/weak tiers (searchable),
+run the key preflight, route the session. In the model pickers, **just type
+to search** (🔎 shows in the title, Backspace edits) — 100+ models filter to
+a handful in a few keystrokes.
+
 ```
-/switchyard                control panel: router, managed process, footer, routes, session totals
+/switchyard                interactive panel (text version: /switchyard panel)
 /switchyard build [k=v]    interactive tier picker over your connected models
 /switchyard init [k=v]     non-interactive config (strong= weak= classifier= base_url= key_env= port= …)
 /switchyard start|stop     manage a local router process
@@ -108,3 +115,4 @@ responses carry no token usage.
 - 0.3.0 — one model ("switchyard") instead of auto/strong/weak; footer grafted into plain hermes at plugin load (nvhermes wrapper now optional)
 - 0.3.1 — UX gated on the selected /model being a switchyard route, re-checked live: pin a catalog model or switch providers and the TUI is stock again; /model switchyard brings it back
 - 0.4.0 — /switchyard build: interactive tier picker over your connected Hermes providers (native /model picker UI); per-tier endpoints/keys/formats in the generated config; multi-key router start
+- 0.5.0 — interactive everything: /switchyard opens an arrow-key panel (footer/router/provider toggles, tier pickers, preflight); type-to-search in model pickers; single-tier edits keep the rest of the config

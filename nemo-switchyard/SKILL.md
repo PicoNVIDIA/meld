@@ -1,7 +1,7 @@
 ---
 name: nemo-switchyard
 description: "Set up and use the NeMo Switchyard integration for Hermes Agent: install the plugin and nvhermes launcher, then read live routing usage via the footer, /nvusage, and /usage."
-version: 0.4.0
+version: 0.5.0
 author: PicoNVIDIA
 license: MIT
 platforms: [linux, macos]
@@ -116,6 +116,11 @@ back to completely stock; `/switchyard` is the control panel;
 show routing stats.
 
 ## Using it
+
+**The interactive path:** `/switchyard` opens an arrow-key panel (↑/↓ move,
+Enter acts, ←/→ cycle footer style, Esc closes) with toggles for the router,
+provider entry, footer, tier pickers and key preflight. Model pickers filter
+as you type (Backspace edits the search).
 
 **The easy path — all inside a session:**
 

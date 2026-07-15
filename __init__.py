@@ -306,7 +306,16 @@ def register(ctx):
         raw = (raw_args or "").strip()
         cmd, _, rest = raw.partition(" ")
         cmd, rest = cmd.lower(), rest.strip()
-        if cmd in ("", "panel"):
+        if cmd == "":
+            ref = _cli_ref()
+            if ref is not None and hasattr(ref, "_sw_open_menu"):
+                try:
+                    ref._sw_open_menu()
+                    return "⏚ ↑/↓ move · Enter select · ←/→ cycle footer · Esc close   (/switchyard panel for text)"
+                except Exception:
+                    pass
+            return _panel()
+        if cmd == "panel":
             return _panel()
         if cmd in ("help", "-h", "--help"):
             return _HELP

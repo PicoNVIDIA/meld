@@ -130,7 +130,40 @@ def write_config(opts, path=None):
     path = Path(path) if path else CONFIG_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(build_yaml(opts))
+    _save_last_opts(opts)
     return path
+
+
+def _settings_path():
+    return Path(__file__).resolve().parent / "settings.json"
+
+
+def _save_last_opts(opts):
+    """Remember the last build (model ids, endpoints, env NAMES — no secrets)
+    so the interactive panel can edit one tier without re-asking everything."""
+    try:
+        data = json.loads(_settings_path().read_text())
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    data["last_opts"] = {k: v for k, v in opts.items() if k in KNOWN_KEYS}
+    try:
+        _settings_path().write_text(json.dumps(data, indent=2))
+    except Exception:
+        pass
+
+
+def load_last_opts():
+    """Last written config opts, over defaults."""
+    opts = dict(DEFAULTS)
+    try:
+        data = json.loads(_settings_path().read_text())
+        saved = data.get("last_opts") or {}
+        opts.update({k: v for k, v in saved.items() if k in KNOWN_KEYS})
+    except Exception:
+        pass
+    return opts
 
 
 # ---------------------------------------------------------------------------
