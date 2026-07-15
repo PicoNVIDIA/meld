@@ -142,6 +142,19 @@ def register(ctx):
         check(routed, "switchyard model selected — UX active (green model name, footer)", optional=True)
         check(ref is not None and hasattr(ref, "_sw_switch_route"),
               "footer grafted into this session", optional=True)
+        if sw_config.CONFIG_PATH.exists():
+            try:
+                for res in sw_config.preflight():
+                    label = f"upstream key ${res['key_env']} at {res['base_url']}"
+                    if res["status"] == 200:
+                        check(True, label)
+                    elif res["status"] in (401, 403, "missing"):
+                        check(False, f"{label} (HTTP {res['status']})" if res["status"] != "missing"
+                              else f"{label} — no value set")
+                    else:
+                        check(False, f"{label} — unreachable", optional=True)
+            except Exception:
+                pass
         lines.append(f"  {d}footer mode: {sw_settings.load_mode()}{r}")
         return "\n".join(lines)
 

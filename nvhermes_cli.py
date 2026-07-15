@@ -483,6 +483,15 @@ def _sw_builder_finish(self):
     print(f"    strong: {strong['model']} ({strong['slug']}, {strong['format']})")
     print(f"    weak:   {weak['model']} ({weak['slug']}, {weak['format']})")
     print(f"    keys read at router start: {keys}")
+    try:
+        ok, report = sw_config.preflight_report(sw_config.preflight(path))
+        print("  upstream key preflight:")
+        for line in report.splitlines():
+            print(f"    {line}")
+        if not ok:
+            print("  ⚠ fix the failing keys before /switchyard start — requests would 401 upstream")
+    except Exception:
+        pass
     print("  next: /switchyard start → /switchyard connect → /model switchyard")
     try:
         self._invalidate()

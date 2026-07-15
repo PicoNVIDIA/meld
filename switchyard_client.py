@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 
 DEFAULT_CANDIDATES = ("http://127.0.0.1:4000", "http://127.0.0.1:4100")
@@ -118,6 +119,38 @@ def health_ok(root, timeout=0.5):
 
 def reset(root, timeout=2.0):
     return _get_json(root + "/v1/stats/reset", timeout=timeout, method="POST")
+
+
+def probe_upstream(base_url, api_key, model, fmt="openai", timeout=15.0):
+    """Auth preflight: a 1-token chat completion against the endpoint.
+
+    A models-list GET is useless here — some endpoints serve their catalog
+    publicly (integrate.api.nvidia.com) — so we exercise the same call chat
+    traffic uses. Returns the HTTP status (200 = key+model work, 401/403 =
+    key rejected, 400/404/422 = auth ok but model unavailable), or None when
+    unreachable. The key is sent to the endpoint only.
+    """
+    body = json.dumps({
+        "model": model,
+        "max_tokens": 1,
+        "messages": [{"role": "user", "content": "hi"}],
+    }).encode()
+    if (fmt or "openai") == "anthropic":
+        url = (base_url or "").rstrip("/") + "/messages"
+        headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01",
+                   "Content-Type": "application/json"}
+    else:
+        url = (base_url or "").rstrip("/") + "/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key}",
+                   "Content-Type": "application/json"}
+    try:
+        req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------

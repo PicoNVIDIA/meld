@@ -134,6 +134,71 @@ def write_config(opts, path=None):
 
 
 # ---------------------------------------------------------------------------
+# upstream key preflight
+# ---------------------------------------------------------------------------
+
+_TIER_RE = re.compile(
+    r"model:\s*(\S+)\s*\n\s*api_key:\s*\$\{([A-Za-z_][A-Za-z0-9_]*)\}"
+    r"\s*\n\s*base_url:\s*(\S+)(?:\s*\n\s*format:\s*(\S+))?")
+
+
+def preflight(config_path=None):
+    """Probe every (model, base_url, key_env) tier via a 1-token completion.
+
+    Returns a list of dicts {model, base_url, key_env, status}: HTTP code
+    (200 ok, 401/403 key rejected, 4xx model unavailable), "missing" when the
+    env var has no value anywhere, or "unreachable". Keys come from the
+    environment or $HERMES_HOME/.env and are sent only to their endpoint.
+    """
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import switchyard_client as swc
+
+    path = Path(config_path) if config_path else CONFIG_PATH
+    try:
+        text = path.read_text()
+    except Exception:
+        return []
+    tiers = sorted({(m.group(1), m.group(3), m.group(2), m.group(4) or "openai")
+                    for m in _TIER_RE.finditer(text)})
+    results = []
+    for model, base_url, key_env, fmt in tiers:
+        value = os.environ.get(key_env) or _key_from_hermes_env_file(key_env)
+        if not value:
+            status = "missing"
+        else:
+            code = swc.probe_upstream(base_url, value, model, fmt)
+            status = code if code is not None else "unreachable"
+        results.append({"model": model, "base_url": base_url,
+                        "key_env": key_env, "status": status})
+    return results
+
+
+def preflight_report(results):
+    """PASS/FAIL lines for preflight() output; returns (all_ok, text)."""
+    if not results:
+        return True, "no upstream targets found in config"
+    lines, ok = [], True
+    for r in results:
+        where = f"{r['model']} @ {r['base_url']}"
+        if r["status"] == 200:
+            lines.append(f"PASS  {where} (${r['key_env']})")
+        elif r["status"] in (401, 403):
+            ok = False
+            lines.append(f"FAIL  ${r['key_env']} rejected by {r['base_url']} for {r['model']} "
+                         f"(HTTP {r['status']}) — this endpoint may need a different key type")
+        elif r["status"] == "missing":
+            ok = False
+            lines.append(f"FAIL  ${r['key_env']} has no value (env or ~/.hermes/.env)")
+        elif isinstance(r["status"], int):
+            ok = False
+            lines.append(f"FAIL  {where}: HTTP {r['status']} — key accepted but model unavailable")
+        else:
+            lines.append(f"WARN  {where} not reachable for preflight")
+    return ok, "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # provider entry in config.yaml (/switchyard connect|disconnect)
 # ---------------------------------------------------------------------------
 
@@ -250,11 +315,19 @@ def _write_state(state):
 
 
 def _pid_alive(pid):
+    """True when *pid* is a live process. Zombies count as dead — a router
+    started from inside a long-lived Hermes session is never reaped by it,
+    so kill(0) alone would report the corpse as running forever."""
     try:
         os.kill(int(pid), 0)
-        return True
     except Exception:
         return False
+    try:
+        out = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],
+                             capture_output=True, text=True, timeout=5)
+        return not out.stdout.strip().startswith("Z")
+    except Exception:
+        return True
 
 
 def router_state():
@@ -404,6 +477,11 @@ def _cli(argv):
     if cmd == "stop":
         ok, msg = stop_router()
         return (0 if ok else 1), msg
+
+    if cmd == "preflight":
+        cfg = rest[0] if rest else None
+        ok, report = preflight_report(preflight(cfg))
+        return (0 if ok else 1), report
 
     if cmd == "status":
         state = router_state()
