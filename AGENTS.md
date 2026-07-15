@@ -17,9 +17,11 @@ hermes afterwards.
    ```
 
    (Use `$HERMES_HOME/plugins/...` if `HERMES_HOME` is set.) It is
-   idempotent: writes a default routing config if none exists, probes the
-   API keys with 1-token requests, starts a local Switchyard router, and
-   registers the `switchyard` provider so it shows in `/model`.
+   idempotent: enables the plugin if the install skipped that, writes a
+   default routing config if none exists, probes the API keys with 1-token
+   requests, starts a local Switchyard router, and registers the
+   `switchyard` provider so it shows in `/model`. Every line starts with ✓
+   or ✗ — if the last line is not the "all set" line, something failed.
 
 3. If setup reports a missing or rejected key, or a missing `switchyard`
    executable, relay its message to the user verbatim and stop — never ask

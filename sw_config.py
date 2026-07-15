@@ -524,6 +524,30 @@ def setup(progress=None):
             except Exception:
                 pass
 
+    # Step 0 — self-heal enablement. Agents sometimes install without
+    # --enable, and the installer's interactive prompt can't be answered in
+    # a non-TTY shell; an unenabled plugin never loads.
+    try:
+        cfg_text = HERMES_CONFIG.read_text()
+    except Exception:
+        cfg_text = ""
+    if "nemo-switchyard" not in cfg_text:
+        hermes_bin = shutil.which("hermes")
+        if hermes_bin:
+            res = subprocess.run([hermes_bin, "plugins", "enable", "nemo-switchyard"],
+                                 capture_output=True, text=True, timeout=60)
+            if "nemo-switchyard" in (HERMES_CONFIG.read_text() if HERMES_CONFIG.exists() else ""):
+                log("✓ plugin enabled (it was installed but not enabled)")
+            else:
+                log("✗ plugin is not enabled and auto-enable failed — run: hermes plugins enable nemo-switchyard")
+                log("  " + (res.stderr or res.stdout).strip()[:200])
+                return False, lines
+        else:
+            log("✗ plugin is not enabled — run: hermes plugins enable nemo-switchyard, then retry")
+            return False, lines
+    else:
+        log("✓ plugin enabled")
+
     bin_path = find_switchyard_bin()
     if not bin_path:
         log("✗ switchyard executable not found — install NeMo Switchyard,")
