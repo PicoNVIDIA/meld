@@ -501,6 +501,24 @@ def _sw_menu_fragments(self):
     return lines
 
 
+def _sw_hint_widget(self):
+    """One-line nudge shown only while nothing is configured yet."""
+    import sw_config
+    from prompt_toolkit.filters import Condition
+    from prompt_toolkit.layout import ConditionalContainer, FormattedTextControl, Window
+
+    def frags():
+        return [("class:status-bar-nv", " ⏚ switchyard"),
+                ("class:status-bar-dim", " installed but not set up — /switchyard → Enter on Quick setup (~30s) ")]
+
+    return ConditionalContainer(
+        Window(FormattedTextControl(frags), height=1, wrap_lines=False),
+        filter=Condition(lambda: getattr(self, "_sw_menu", None) is None
+                         and not getattr(self, "_model_picker_state", None)
+                         and not sw_config.CONFIG_PATH.exists()),
+    )
+
+
 def _sw_menu_widget(self):
     from prompt_toolkit.filters import Condition
     from prompt_toolkit.layout import ConditionalContainer, FormattedTextControl, Window
@@ -661,7 +679,15 @@ def _sw_menu_activate(self, direction=0):
         _sw_menu_run(self, "probing upstream keys…", _pf)
     elif key == "route":
         _sw_close_menu(self)
-        print("  " + _sw_switch_route(self, "switchyard"))
+        if getattr(self, "_sw_endpoint_root", None):
+            print("  " + _sw_switch_route(self, "switchyard"))
+        else:
+            # unrouted session: go through the stock switch (provider change),
+            # off the render thread — it does network resolution.
+            threading.Thread(
+                target=lambda: self._handle_model_switch("/model switchyard"),
+                daemon=True,
+            ).start()
     elif key == "close":
         _sw_close_menu(self)
 
@@ -1003,6 +1029,7 @@ def graft():
             _sw_ensure_init(self)
             # panel first so the ⏚ row stays glued to the status bar below it
             widgets.append(_sw_menu_widget(self))
+            widgets.append(_sw_hint_widget(self))
             widgets.append(_sw_extra_row_widget(self))
         except Exception:
             pass
@@ -1028,9 +1055,19 @@ def graft():
             pass
 
     def patched_model(self, cmd_original):
+        try:
+            _sw_ensure_init(self)
+            # `/model switchyard` from an unrouted session: the provider
+            # entry also surfaces via the legacy custom-provider view, so a
+            # bare model name is ambiguous — pin the provider explicitly.
+            parts = cmd_original.split()
+            if (len(parts) == 2 and parts[1] == "switchyard"
+                    and not getattr(self, "_sw_endpoint_root", None)):
+                cmd_original = cmd_original + " --provider switchyard"
+        except Exception:
+            pass
         if not getattr(self, "_sw_wrapper", False):
             try:
-                _sw_ensure_init(self)
                 if _sw_model_switch_preamble(self, cmd_original):
                     return
             except Exception:
@@ -1122,6 +1159,7 @@ class SwitchyardCLI(_HermesCLI):
         widgets = list(super()._get_extra_tui_widgets())
         try:
             widgets.append(_sw_menu_widget(self))
+            widgets.append(_sw_hint_widget(self))
             widgets.append(_sw_extra_row_widget(self))
         except Exception:
             pass
