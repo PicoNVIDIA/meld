@@ -1,5 +1,8 @@
 # meld — NeMo Switchyard × Hermes Agent
 
+> **Agents:** installing this for a user? Follow [AGENTS.md](AGENTS.md) —
+> finish the setup in one command, don't stop at the install.
+
 Live [NeMo Switchyard](https://github.com/NVIDIA-NeMo/Switchyard) routing
 visibility inside [Hermes Agent](https://github.com/NousResearch/hermes-agent) —
 in the stock `hermes` command, no wrapper needed: a live footer with
