@@ -1,7 +1,7 @@
 ---
 name: nemo-switchyard
 description: "Set up and use the NeMo Switchyard integration for Hermes Agent: install the plugin and nvhermes launcher, then read live routing usage via the footer, /nvusage, and /usage."
-version: 0.6.0
+version: 0.7.0
 author: PicoNVIDIA
 license: MIT
 platforms: [linux, macos]
@@ -19,7 +19,7 @@ routing visible inside Hermes:
 
 - a live **footer** (three styles) with request/token/cost totals and the
   last served model, with the model name in NVIDIA green while routed
-- the **/switchyard hub** — control panel, config builder (`init`), local
+- the **/router hub** — control panel, config builder (`init`), local
   router lifecycle (`start`/`stop`), provider registration (`connect`), route
   listing/switching (`routes`/`use`), footer toggles, usage, health checks
 - **/model integration** — with the provider connected, routes appear in the
@@ -33,7 +33,7 @@ routing visible inside Hermes:
 - **Immediately after installing this skill or plugin for a user** — offer to
   finish the setup right away rather than waiting to be asked. The whole
   thing is one command (phase 3 below) or, for the user themselves, one
-  Enter on the `/switchyard` panel's Quick setup row.
+  Enter on the `/router` panel's Quick setup row.
 - The user asks how to see Switchyard usage, cost, or routing decisions.
 
 ## Setup procedure (for the agent)
@@ -109,18 +109,18 @@ SWITCHYARD_URL=http://127.0.0.1:<port> <plugin-dir>/scripts/doctor.sh  # every r
 ```
 
 **Phase 5 — hand off.** Tell the user, briefly: what was installed and
-started; route a session with `hermes --provider switchyard -m switchyard`,
-or pick `switchyard` in `/model` once — Hermes persists the choice, so
+started; route a session with `hermes --provider router -m router`,
+or pick `router` in `/model` once — Hermes persists the choice, so
 plain `hermes` stays routed (and `/model` switches back anytime); the
 footer and green model name appear exactly while the selected `/model` is a
 switchyard route — pin a catalog model or switch providers and the TUI goes
-back to completely stock; `/switchyard` is the control panel;
-`/switchyard footer` cycles footer styles; `/switchyard usage` or `/usage`
+back to completely stock; `/router` is the control panel;
+`/router footer` cycles footer styles; `/router usage` or `/usage`
 show routing stats.
 
 ## Using it
 
-**The interactive path:** `/switchyard` opens an arrow-key panel (↑/↓ move,
+**The interactive path:** `/router` opens an arrow-key panel (↑/↓ move,
 Enter acts, ←/→ cycle footer style, Esc closes) with toggles for the router,
 provider entry, footer, tier pickers and key preflight. Model pickers filter
 as you type (Backspace edits the search).
@@ -128,26 +128,26 @@ as you type (Backspace edits the search).
 **The easy path — all inside a session:**
 
 ```
-/switchyard build         # interactive: pick strong/weak tiers from your connected
+/router build         # interactive: pick strong/weak tiers from your connected
                           # models via the native picker (endpoints/keys/formats
                           # are derived from your Hermes provider config)
-/switchyard init          # or non-interactive defaults: weak=nemotron ultra,
+/router init          # or non-interactive defaults: weak=nemotron ultra,
                           # strong=opus 4.8, nano classifier
-/switchyard start         # runs a local router with it (key env vars must be available)
-/switchyard connect       # registers provider "switchyard" so /model lists it
+/router start         # runs a local router with it (key env vars must be available)
+/router connect       # registers provider "router" so /model lists it
 ```
 
-Then relaunch routed: `hermes --provider switchyard -m switchyard` (or pick
+Then relaunch routed: `hermes --provider router -m router` (or pick
 `switchyard` once in `/model` — Hermes persists it) — one model named
 **switchyard**; the router picks the tier per request. To pin a specific
 upstream model, select it from the catalog in `/model` (every upstream
-model is exposed as a passthrough route). `/switchyard disconnect`
+model is exposed as a passthrough route). `/router disconnect`
 removes the provider entry again (it is marker-bounded — nothing else in the
 user's configuration is touched, and both commands only run when the user
 invokes them). `init` accepts `key=value` overrides: `strong=`, `weak=`,
 `classifier=`, `base_url=`, `key_env=`, `port=`, `profile=`,
 `strong_format=`, `weak_format=`, `min_confidence=`. If `start` cannot find
-the switchyard executable, set it once with `/switchyard bin <path>` or
+the switchyard executable, set it once with `/router bin <path>` or
 export `SWITCHYARD_BIN`.
 
 **Per-session env alternative** (no provider entry; the dummy key is fine —
@@ -167,18 +167,18 @@ name in the status bar renders NVIDIA green and the footer is live.
 `SWITCHYARD_FOOTER` env overrides):
 
 ```
-row  ⏚ switchyard │ llm-classifier │ 42 req │ 128.4K tok │ $0.43 │ fast 30 · smart 12 │ → kimi-k2.6
+row  ⏚ router │ llm-classifier │ 42 req │ 128.4K tok │ $0.43 │ fast 30 · smart 12 │ → kimi-k2.6
      ⚕ llm-classifier │ 17.9K/272K │ [█░░░░░░░░░] 7% │ 5h 23m │ ⏲ 6s │ ✓ 5h 23m
 bar  ⚕ llm-classifier→kimi-k2.6 │ 17.9K/272K │ [█░░░░░░░░░] 7% │ ⏚ 42req $0.43 │ ⏲ 6s │ ✓ 5h 23m
 min  ⚕ llm-classifier │ 17.9K/272K │ [█░░░░░░░░░] 7% │ 5h 23m │ ⏲ 6s │ ✓ 5h 23m │ ⏚ $0.43
 off  (stock bar; model name stays green while routed)
 ```
 
-**Commands.** `/switchyard` — control panel (router, managed process,
-footer, routes, session totals); `/switchyard usage` (alias `/nvusage`) —
+**Commands.** `/router` — control panel (router, managed process,
+footer, routes, session totals); `/router usage` (alias `/nvusage`) —
 aggregate + per-model usage table and recent routing decisions;
-`/switchyard status` — PASS/FAIL health checklist; `/switchyard reset` —
-reset the router's stats; `/switchyard footer` — cycle footer styles
+`/router status` — PASS/FAIL health checklist; `/router reset` —
+reset the router's stats; `/router footer` — cycle footer styles
 (alias `/nvfooter`). `/usage` — the native Hermes usage report gains a
 switchyard section under `nvhermes`.
 
@@ -203,7 +203,7 @@ switchyard section under `nvhermes`.
   `OPENROUTER_BASE_URL` + `--provider openrouter` launch shown above.
   `SWITCHYARD_URL` enables inspection only, not routing.
 - **Footer missing?** The session must actually route through Switchyard
-  (`/switchyard status`), the plugin must be enabled, and
-  `/switchyard footer` should not say `off`.
+  (`/router status`), the plugin must be enabled, and
+  `/router footer` should not say `off`.
 - **Port conflicts:** pick a free port for test routers; check with
   `lsof -nP -iTCP:<port> -sTCP:LISTEN`.

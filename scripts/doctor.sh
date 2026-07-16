@@ -39,7 +39,7 @@ else
 fi
 
 if curl -fsS -m 2 "$URL/health" 2>/dev/null | grep -q '"ok"'; then
-  pass "switchyard reachable at $URL"
+  pass "router reachable at $URL"
   if curl -fsS -m 2 "$URL/v1/models" 2>/dev/null | grep -q '"owned_by": *"switchyard"'; then
     pass "fingerprint (owned_by: switchyard)"
   else
@@ -56,7 +56,7 @@ if curl -fsS -m 2 "$URL/health" 2>/dev/null | grep -q '"ok"'; then
     info "decisions endpoint unavailable (needs a deterministic routing profile) — optional"
   fi
 else
-  info "no switchyard router at $URL — router checks skipped (set SWITCHYARD_URL or start one)"
+  info "no router at $URL — router checks skipped (set SWITCHYARD_URL or start one)"
 fi
 
 exit "$fail"

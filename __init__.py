@@ -1,6 +1,6 @@
 """NeMo Switchyard integration for Hermes Agent.
 
-Registers the /switchyard command hub (plus /nvusage and /nvfooter aliases)
+Registers the /router command hub (/switchyard, /nvusage, /nvfooter aliases)
 and bundles the nemo-switchyard skill. The TUI footer itself lives in
 nvhermes_cli.py and is grafted onto HermesCLI at load, so the stock `hermes`
 command renders it (dormant unless the session routes through Switchyard).
@@ -19,28 +19,28 @@ import sw_settings
 import switchyard_client as swc
 
 _NOT_FOUND_HINT = (
-    "no switchyard router detected.\n"
-    "  · build a config:  /switchyard init          (ultra=weak, opus=strong defaults)\n"
-    "  · start a router:  /switchyard start\n"
-    "  · connect + relaunch:  /switchyard connect, then hermes --provider switchyard -m switchyard\n"
+    "no router detected.\n"
+    "  · build a config:  /router init          (ultra=weak, opus=strong defaults)\n"
+    "  · start a router:  /router start\n"
+    "  · connect + relaunch:  /router connect, then hermes --provider router -m router\n"
     "  · or set SWITCHYARD_URL for inspection without routing\n"
-    "  · checks: /switchyard status"
+    "  · checks: /router status"
 )
 
 _HELP = """\
-/switchyard                control panel (this overview)
-/switchyard build [k=v]    interactive builder — pick strong/weak tiers from your connected models
-/switchyard init [k=v]     non-interactive config — defaults: weak=nemotron ultra, strong=opus 4.8
-/switchyard start|stop     run/stop a local router with that config
-/switchyard connect [url]  register the router as a hermes provider (shows in /model picker)
-/switchyard disconnect     remove that provider entry again
-/switchyard routes         list the router's routes
-/switchyard use <route>    switch this session to a route (also: /model <route>)
-/switchyard footer [m]     toggle footer style (row → bar → min → off), or set one
-/switchyard usage          usage & routing decisions   (alias: /nvusage)
-/switchyard reset          reset the router's stats
-/switchyard status         PASS/FAIL health checklist
-/switchyard bin <path>     remember where the switchyard executable lives
+/router                control panel (this overview)
+/router build [k=v]    interactive builder — pick strong/weak tiers from your connected models
+/router init [k=v]     non-interactive config with defaults
+/router start|stop     run/stop a local router with that config
+/router connect [url]  register the router as a hermes provider (shows in /model picker)
+/router disconnect     remove that provider entry again
+/router routes         list the configured routes
+/router use <route>    switch this session to a route (also: /model <route>)
+/router footer [m]     toggle footer style (row → bar → min → off), or set one
+/router usage          usage & routing decisions   (alias: /nvusage)
+/router reset          reset the router's stats
+/router status         PASS/FAIL health checklist
+/router bin <path>     remember where the router executable lives
 init keys: strong= weak= classifier= base_url= key_env= port= profile= strong_format= weak_format= min_confidence="""
 
 
@@ -93,14 +93,14 @@ def register(ctx):
         ref = _cli_ref()
         root = _find_root()
         routed = ref is not None and getattr(ref, "_sw_active", False)
-        lines = [f"{g}{b}⏚ switchyard{r}"]
-        lines.append(f"  router    {root or 'not detected'}"
+        lines = [f"{g}{b}⏚ router{r}"]
+        lines.append(f"  endpoint  {root or 'not detected'}"
                      + (f"  {g}● routed{r}" if routed else (f"  {d}(inspection only — session not routed){r}" if root else "")))
         state = sw_config.router_state()
         if state:
             flag = f"{g}running{r}" if state.get("running") else "stopped"
             lines.append(f"  managed   {flag}  {d}pid {state.get('pid')} · port {state.get('port')} · {state.get('config')}{r}")
-        lines.append(f"  footer    {sw_settings.load_mode()}  {d}(/switchyard footer to cycle){r}")
+        lines.append(f"  footer    {sw_settings.load_mode()}  {d}(/router footer to cycle){r}")
         if ref is not None:
             lines.append(f"  route     {getattr(ref, 'model', None) or '-'}")
         if root:
@@ -119,27 +119,27 @@ def register(ctx):
         return "\n".join(lines)
 
     def _status_report():
-        lines = [f"{g}{b}── switchyard status ──{r}"]
+        lines = [f"{g}{b}── router status ──{r}"]
 
         def check(ok, label, optional=False):
             mark = f"{g}PASS{r}" if ok else (f"{d}  — {r}" if optional else "FAIL")
             lines.append(f"  {mark}  {label}")
 
         ref = _cli_ref()
-        check(True, "plugin loaded (/switchyard registered)")
+        check(True, "plugin loaded (/router registered)")
         session_url = _session_base_url()
         root = _find_root()
         routed = (ref is not None and getattr(ref, "_sw_active", False)) or (
             bool(session_url) and swc.detect(session_url) is not None
         )
-        check(root is not None, f"switchyard reachable ({root or 'none found'})")
+        check(root is not None, f"router reachable ({root or 'none found'})")
         if root:
             check(swc.health_ok(root), f"health ok at {root}/health")
             check(swc.stats(root) is not None, "stats endpoint (/v1/routing/stats)")
             check(swc.decisions(root) is not None,
                   "decisions endpoint (/v1/routing/decisions — needs deterministic profile)",
                   optional=True)
-        check(routed, "switchyard model selected — UX active (green model name, footer)", optional=True)
+        check(routed, "router model selected — UX active (green model name, footer)", optional=True)
         check(ref is not None and hasattr(ref, "_sw_switch_route"),
               "footer grafted into this session", optional=True)
         if sw_config.CONFIG_PATH.exists():
@@ -169,7 +169,7 @@ def register(ctx):
         if root is None:
             return _NOT_FOUND_HINT
         if swc.reset(root) is not None:
-            return f"switchyard stats reset at {root}"
+            return f"router stats reset at {root}"
         return f"reset failed — POST {root}/v1/stats/reset not available"
 
     def _routes():
@@ -187,15 +187,15 @@ def register(ctx):
             suffix = f" {d}(default){r}" if rt["id"] == default else ""
             ctxw = swc.fmt_tokens(rt.get("context_window")) if rt.get("context_window") else "?"
             lines.append(f"  {mark} {b}{rt['id']:<20}{r} {d}{rt['profile']:<14} ctx {ctxw}{r}{suffix}")
-        lines.append(f"{d}switch with /switchyard use <route> (or /model <route>){r}")
+        lines.append(f"{d}switch with /router use <route> (or /model <route>){r}")
         return "\n".join(lines)
 
     def _use(route):
         if not route:
-            return "usage: /switchyard use <route> — see /switchyard routes"
+            return "usage: /router use <route> — see /router routes"
         ref = _cli_ref()
         if ref is None or not hasattr(ref, "_sw_switch_route"):
-            return "route switching needs a session routed through switchyard"
+            return "route switching needs a session routed through the router"
         return ref._sw_switch_route(route)
 
     def _footer(mode):
@@ -229,11 +229,11 @@ def register(ctx):
         _save_setting("router_port", int(opts["port"]))
         return (
             f"{g}{b}✓ wrote {path}{r}\n"
-            f"  one model: {b}switchyard{r} {d}— {opts['classifier'].rsplit('/', 1)[-1]} picks between"
+            f"  one model: {b}router{r} {d}— {opts['classifier'].rsplit('/', 1)[-1]} picks between"
             f" {opts['strong'].rsplit('/', 1)[-1]} (strong) and {opts['weak'].rsplit('/', 1)[-1]} (weak){r}\n"
             f"  key: read from ${opts['key_env']} at router start (never stored)\n"
-            f"  next: {b}/switchyard start{r} → {b}/switchyard connect{r} → relaunch with"
-            f" {b}hermes --provider switchyard -m switchyard{r}"
+            f"  next: {b}/router start{r} → {b}/router connect{r} → relaunch with"
+            f" {b}hermes --provider router -m router{r}"
         )
 
     def _connect(raw):
@@ -246,10 +246,10 @@ def register(ctx):
                 root = _find_root()
                 url = (root + "/v1") if root else ""
         if not url:
-            return "no router url given and none detected — /switchyard connect <url>"
+            return "no router url given and none detected — /router connect <url>"
         root = swc.detect(url)
         if root is None:
-            return f"{url} does not fingerprint as a switchyard router (is it up yet? ~15s to bind)"
+            return f"{url} does not fingerprint as a router (is it up yet? ~15s to bind)"
         rts, _default = swc.routes(root)
         ids = [rt["id"] for rt in rts]
         ok, msg = sw_config.connect_provider(root + "/v1", ids)
@@ -257,10 +257,10 @@ def register(ctx):
             return msg
         return (
             f"{g}{b}✓ {msg}{r}\n"
-            f"  provider {b}switchyard{r} → {root}/v1  {d}routes: {', '.join(ids) or '-'}{r}\n"
-            f"  · new sessions: {b}hermes --provider switchyard -m {ids[0] if ids else '<route>'}{r}\n"
-            f"  · the /model picker now lists these under {b}Switchyard{r}\n"
-            f"  · undo anytime: {b}/switchyard disconnect{r}"
+            f"  provider {b}router{r} → {root}/v1  {d}routes: {', '.join(ids) or '-'}{r}\n"
+            f"  · new sessions: {b}hermes --provider router -m {ids[0] if ids else '<route>'}{r}\n"
+            f"  · the /model picker now lists these under {b}Router{r}\n"
+            f"  · undo anytime: {b}/router disconnect{r}"
         )
 
     def _disconnect():
@@ -271,11 +271,11 @@ def register(ctx):
         settings = _load_settings()
         bin_path = sw_config.find_switchyard_bin(settings)
         if not bin_path:
-            return ("switchyard executable not found — set it once with "
-                    "/switchyard bin <path> (or export SWITCHYARD_BIN)")
+            return ("router executable not found — set it once with "
+                    "/router bin <path> (or export SWITCHYARD_BIN)")
         cfg = Path(raw.strip()) if raw.strip() else sw_config.CONFIG_PATH
         if not cfg.exists():
-            return f"no config at {cfg} — run /switchyard init first"
+            return f"no config at {cfg} — run /router init first"
         port, key_env = sw_config.DEFAULTS["port"], sw_config.DEFAULTS["key_env"]
         try:
             text = cfg.read_text()
@@ -295,11 +295,11 @@ def register(ctx):
         p = raw.strip()
         if not p:
             found = sw_config.find_switchyard_bin(_load_settings())
-            return f"switchyard bin: {found or 'not set'} — set with /switchyard bin <path>"
+            return f"router bin: {found or 'not set'} — set with /router bin <path>"
         if not Path(p).exists():
             return f"no file at {p}"
         _save_setting("switchyard_bin", p)
-        return f"✓ switchyard bin → {p}"
+        return f"✓ router bin → {p}"
 
     # ── dispatch ───────────────────────────────────────────────────────────
     def _handle_switchyard(raw_args=""):
@@ -311,7 +311,7 @@ def register(ctx):
             if ref is not None and hasattr(ref, "_sw_open_menu"):
                 try:
                     ref._sw_open_menu()
-                    return "⏚ ↑/↓ move · Enter select · ←/→ cycle footer · Esc close   (/switchyard panel for text)"
+                    return "⏚ ↑/↓ move · Enter select · ←/→ cycle footer · Esc close   (/router panel for text)"
                 except Exception:
                     pass
             return _panel()
@@ -371,25 +371,30 @@ def register(ctx):
     try:
         if not sw_config.CONFIG_PATH.exists() and not _load_settings().get("first_run_hint_shown"):
             _save_setting("first_run_hint_shown", True)
-            print("⏚ nemo-switchyard installed — type /switchyard and press Enter on Quick setup (~30s)")
+            print("⏚ router plugin installed — type /router and press Enter on Quick setup (~30s)")
     except Exception:
         pass
 
     ctx.register_command(
+        "router",
+        _handle_switchyard,
+        description="Model-router control panel: routes, footer toggles, usage, config builder, start/stop",
+        args_hint="[build|init|start|stop|connect|routes|use|footer|usage|status|reset|bin]",
+    )
+    ctx.register_command(
         "switchyard",
         _handle_switchyard,
-        description="Switchyard control panel: routes, footer toggles, usage, config builder, start/stop",
-        args_hint="[init|start|stop|routes|use|footer|usage|status|reset|bin]",
+        description="Alias of /router",
     )
     ctx.register_command(
         "nvusage",
         _handle_nvusage,
-        description="NeMo Switchyard usage & routing stats (alias of /switchyard usage)",
+        description="Router usage & routing stats (alias of /router usage)",
     )
     ctx.register_command(
         "nvfooter",
         _handle_nvfooter,
-        description="Switchyard footer style: row|bar|min|off (alias of /switchyard footer)",
+        description="Router footer style: row|bar|min|off (alias of /router footer)",
     )
     try:
         ctx.register_skill(

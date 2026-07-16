@@ -20,10 +20,10 @@ should get to see.
    ```
 
 3. Hand off with exactly this: **restart hermes** (plugins load at session
-   start). A `⏚ switchyard` hint line will appear above the status bar —
-   type `/switchyard` and press **Enter on the Quick setup row**. It does
+   start). A `⏚ router` hint line will appear above the status bar —
+   type `/router` and press **Enter on the Quick setup row**. It does
    everything (config, key preflight, local router, provider registration)
-   with live progress, in about 30 seconds. Then `/model switchyard` — the
+   with live progress, in about 30 seconds. Then `/model router` — the
    live routing footer and green model name appear automatically.
 
 **Only if the user explicitly asks you to do the whole setup for them**

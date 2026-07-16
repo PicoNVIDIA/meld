@@ -41,7 +41,7 @@ _NV_GREEN_DIM = "#5a8c00"
 # The Switchyard UX is active only while BOTH hold, re-checked every poll:
 #   1. the session's endpoint fingerprints as a Switchyard router, and
 #   2. the currently selected /model is one of its configured routes
-#      (e.g. "switchyard") — pinning a catalog model or switching providers
+#      (e.g. "router") — pinning a catalog model or switching providers
 #      returns the TUI to a completely stock look.
 
 def _sw_ensure_init(self):
@@ -169,7 +169,7 @@ def _sw_row_fragments(self):
         st = self._sw_snapshot
         if not st:
             return [
-                ("class:status-bar-nv", " ⏚ switchyard "),
+                ("class:status-bar-nv", " ⏚ router "),
                 ("class:status-bar-dim", "connecting…"),
             ]
         width = self._get_tui_terminal_width()
@@ -177,7 +177,7 @@ def _sw_row_fragments(self):
         cost = swc.fmt_cost(swc.total_cost(st))
         if width < 76:
             return [
-                ("class:status-bar-nv", " ⏚ swyd"),
+                ("class:status-bar-nv", " ⏚ router"),
                 ("class:status-bar-dim", " · "),
                 ("class:status-bar", f"{reqs} req"),
                 ("class:status-bar-dim", " · "),
@@ -186,8 +186,8 @@ def _sw_row_fragments(self):
         sep = ("class:status-bar-dim", " │ ")
         tok = swc.fmt_tokens((st.get("total_tokens") or {}).get("total"))
         route = str(getattr(self, "model", "") or "").rsplit("/", 1)[-1][:26]
-        frags = [("class:status-bar-nv", " ⏚ switchyard")]
-        if route and route != "switchyard":
+        frags = [("class:status-bar-nv", " ⏚ router")]
+        if route and route != _sw_default_route(self):
             frags += [sep, ("class:status-bar", route)]
         frags += [
             sep,
@@ -206,7 +206,7 @@ def _sw_row_fragments(self):
             frags += [sep, ("class:status-bar-nv-dim", f"→ {served}")]
         return frags
     except Exception:
-        return [("class:status-bar-nv", " ⏚ switchyard")]
+        return [("class:status-bar-nv", " ⏚ router")]
 
 
 def _sw_served_model_short(self):
@@ -226,12 +226,27 @@ def _sw_inline_segment(self):
     return f"⏚ {st.get('total_requests', 0)}req {swc.fmt_cost(swc.total_cost(st))}"
 
 
+def _sw_default_route(self):
+    """The primary route id at the current endpoint ('router' by default)."""
+    try:
+        root = getattr(self, "_sw_endpoint_root", None)
+        if root:
+            rts, default = swc.routes(root)
+            if default:
+                return default
+            if rts:
+                return rts[0]["id"]
+    except Exception:
+        pass
+    return "router"
+
+
 def _sw_switch_route(self, route):
     """Switch this session to a Switchyard route (same endpoint, new model id)."""
     _sw_ensure_init(self)
     root = getattr(self, "_sw_endpoint_root", None)
     if not root:
-        return "this session's endpoint is not a switchyard router — see /switchyard status"
+        return "this session's endpoint is not the router — see /router status"
     ids = _sw_route_ids(self, root)
     if route not in ids:
         return f"unknown route {route!r} — available: {', '.join(ids) or 'none'}"
@@ -250,7 +265,7 @@ def _sw_switch_route(self, route):
     self.model = route
     self._sw_active = True  # poll loop confirms on its next cycle
     self._pending_model_switch_note = (
-        f"[Note: switchyard route was switched from {old} to {route}. "
+        f"[Note: router route was switched from {old} to {route}. "
         f"The router decides which upstream model serves each request.]"
     )
     try:
@@ -300,7 +315,7 @@ def _sw_usage_section(self):
         st = swc.stats(self._sw_url)
         dec = swc.decisions(self._sw_url)
         print()
-        print(swc.render_usage(self._sw_url, st, dec, heading="switchyard", color=False))
+        print(swc.render_usage(self._sw_url, st, dec, heading="router", color=False))
     except Exception:
         pass
 
@@ -326,7 +341,7 @@ def _sw_model_switch_preamble(self, cmd_original):
             marks = ", ".join(
                 ("▶ " if rt == current else "") + rt
                 for rt in ids)
-            print(f"  ⏚ switchyard routes: {marks}")
+            print(f"  ⏚ router routes: {marks}")
             print("    switch with /model <route> — provider picker below")
     except Exception:
         pass
@@ -426,7 +441,7 @@ def _sw_menu_rows(self):
     port = (state or {}).get("port") or opts.get("port")
     connected = False
     try:
-        connected = "switchyard" in (sw_config.HERMES_CONFIG.read_text())
+        connected = sw_config._MARK_BEGIN in (sw_config.HERMES_CONFIG.read_text())
     except Exception:
         pass
     m = self._sw_menu or {}
@@ -463,8 +478,8 @@ def _sw_menu_rows(self):
         ("save", "Save changes", save_val,
          "writes config + key preflight" if n_pending else "pick a tier first"),
         ("preflight", "Key preflight", pf_label, "1-token probe per tier"),
-        ("route", "Use switchyard", "route this session" if self.model != "switchyard" else "▶ current model",
-         "Enter → /model switchyard"),
+        ("route", "Use router", "route this session" if self.model != _sw_default_route(self) else "▶ current model",
+         "Enter → /model router"),
         ("close", "Close", "", "Esc discards unsaved picks"),
     ]
 
@@ -474,7 +489,7 @@ def _sw_menu_fragments(self):
     if not m:
         return []
     rows = _sw_menu_rows(self)
-    title = "⏚ Switchyard"
+    title = "⏚ Router"
     label_w = max(len(r[1]) for r in rows)
     value_w = max(len(r[2]) for r in rows)
     inner = max(52, max(2 + label_w + 2 + value_w + 2 + len(r[3]) + 3 for r in rows))
@@ -514,8 +529,8 @@ def _sw_hint_widget(self):
     from prompt_toolkit.layout import ConditionalContainer, FormattedTextControl, Window
 
     def frags():
-        return [("class:status-bar-nv", " ⏚ switchyard"),
-                ("class:status-bar-dim", " installed but not set up — /switchyard → Enter on Quick setup (~30s) ")]
+        return [("class:status-bar-nv", " ⏚ router"),
+                ("class:status-bar-dim", " installed but not set up — /router → Enter on Quick setup (~30s) ")]
 
     return ConditionalContainer(
         Window(FormattedTextControl(frags), height=1, wrap_lines=False),
@@ -629,7 +644,7 @@ def _sw_menu_activate(self, direction=0):
             _sw_menu_run(self, "starting router…", _start)
     elif key == "provider":
         try:
-            connected = "switchyard" in sw_config.HERMES_CONFIG.read_text()
+            connected = sw_config._MARK_BEGIN in sw_config.HERMES_CONFIG.read_text()
         except Exception:
             connected = False
         if connected:
@@ -640,7 +655,7 @@ def _sw_menu_activate(self, direction=0):
                 port = (state or {}).get("port") or sw_config.load_last_opts().get("port")
                 root = swc.detect(f"http://127.0.0.1:{port}/v1", timeout=2.0)
                 if not root:
-                    return f"no switchyard router on :{port} — start it first"
+                    return f"no router on :{port} — start it first"
                 rts, _d = swc.routes(root)
                 return sw_config.connect_provider(root + "/v1", [r["id"] for r in rts])[1]
             _sw_menu_run(self, "connecting…", _connect)
@@ -689,12 +704,12 @@ def _sw_menu_activate(self, direction=0):
     elif key == "route":
         _sw_close_menu(self)
         if getattr(self, "_sw_endpoint_root", None):
-            print("  " + _sw_switch_route(self, "switchyard"))
+            print("  " + _sw_switch_route(self, _sw_default_route(self)))
         else:
             # unrouted session: go through the stock switch (provider change),
             # off the render thread — it does network resolution.
             threading.Thread(
-                target=lambda: self._handle_model_switch("/model switchyard"),
+                target=lambda: self._handle_model_switch("/model router"),
                 daemon=True,
             ).start()
     elif key == "close":
@@ -823,7 +838,7 @@ def _sw_builder_providers(self):
 
     for row in payload.get("providers") or []:
         slug = row.get("slug") or ""
-        if slug == "switchyard":
+        if slug in ("router", "switchyard"):
             continue
         base_url, key_env = _sw_provider_endpoint(
             self, slug, ctx.user_providers, ctx.custom_providers)
@@ -871,7 +886,7 @@ def _sw_start_builder(self, raw_args="", only_tier=None, menu_mode=False):
         return ""  # picker title carries the tier; pick returns to the panel
     note = f"  (skipped, no direct API key: {', '.join(skipped)})\n" if skipped else ""
     tier_word = (only_tier or "strong").upper()
-    return (f"⏚ switchyard build — pick the {tier_word} tier model — type to search 🔎\n{note}"
+    return (f"⏚ router build — pick the {tier_word} tier model — type to search 🔎\n{note}"
             "  ↑/↓ + Enter selects; Backspace edits the search; Cancel aborts")
 
 
@@ -882,7 +897,7 @@ def _sw_builder_open_picker(self):
     self._open_model_picker(
         [dict(r) for r in b["rows"]],
         f"picking the {label}",
-        "switchyard build",
+        "router build",
         user_provs=getattr(b["ctx"], "user_providers", None),
         custom_provs=getattr(b["ctx"], "custom_providers", None),
     )
@@ -974,7 +989,7 @@ def _sw_builder_finish(self):
             print("  ⚠ fix the failing keys before /switchyard start — requests would 401 upstream")
     except Exception:
         pass
-    print("  next: /switchyard start → /switchyard connect → /model switchyard")
+    print("  next: /router start → /router connect → /model router")
     try:
         self._invalidate()
     except Exception:
@@ -992,7 +1007,7 @@ def _sw_builder_abort(self, b=None, reason="cancelled"):
         except Exception:
             pass
         return
-    print(f"  ⏚ switchyard build {reason} — run /switchyard build to restart")
+    print(f"  ⏚ router build {reason} — run /router build to restart")
 
 
 # ── class graft (called by the plugin at load time) ────────────────────────
@@ -1070,9 +1085,9 @@ def graft():
             # entry also surfaces via the legacy custom-provider view, so a
             # bare model name is ambiguous — pin the provider explicitly.
             parts = cmd_original.split()
-            if (len(parts) == 2 and parts[1] == "switchyard"
+            if (len(parts) == 2 and parts[1] in ("router", "switchyard")
                     and not getattr(self, "_sw_endpoint_root", None)):
-                cmd_original = cmd_original + " --provider switchyard"
+                cmd_original = f"/model {parts[1] if parts[1] != 'switchyard' else 'router'} --provider router"
         except Exception:
             pass
         if not getattr(self, "_sw_wrapper", False):

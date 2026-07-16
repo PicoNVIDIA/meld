@@ -230,7 +230,7 @@ def latest_decision(dec):
     return recent[-1]
 
 
-def render_usage(root, st, dec, heading="switchyard usage", color=True):
+def render_usage(root, st, dec, heading="router usage", color=True):
     """Human-readable usage report. Shared by /nvusage (ANSI) and the native
     /usage section (plain — that print path sanitizes escape bytes)."""
     g, d, b, r = (GREEN, DIM, BOLD, RST) if color else ("", "", "", "")
