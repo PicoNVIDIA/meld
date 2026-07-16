@@ -702,16 +702,28 @@ def _sw_menu_activate(self, direction=0):
             return report
         _sw_menu_run(self, "probing upstream keys…", _pf)
     elif key == "route":
-        _sw_close_menu(self)
         if getattr(self, "_sw_endpoint_root", None):
+            _sw_close_menu(self)
             print("  " + _sw_switch_route(self, _sw_default_route(self)))
-        else:
-            # unrouted session: go through the stock switch (provider change),
-            # off the render thread — it does network resolution.
-            threading.Thread(
-                target=lambda: self._handle_model_switch("/model router"),
-                daemon=True,
-            ).start()
+            return
+        try:
+            connected = sw_config._MARK_BEGIN in sw_config.HERMES_CONFIG.read_text()
+        except Exception:
+            connected = False
+        if not connected:
+            m["note"] = "not set up yet — run Quick setup (first row) before routing"
+            try:
+                self._invalidate(min_interval=0.0)
+            except Exception:
+                pass
+            return
+        _sw_close_menu(self)
+        # unrouted session with a provider entry: stock switch (provider
+        # change), off the render thread — it does network resolution.
+        threading.Thread(
+            target=lambda: self._handle_model_switch("/model router"),
+            daemon=True,
+        ).start()
     elif key == "close":
         _sw_close_menu(self)
 
@@ -1081,13 +1093,23 @@ def graft():
     def patched_model(self, cmd_original):
         try:
             _sw_ensure_init(self)
-            # `/model switchyard` from an unrouted session: the provider
-            # entry also surfaces via the legacy custom-provider view, so a
-            # bare model name is ambiguous — pin the provider explicitly.
+            # `/model router` from an unrouted session: the provider entry
+            # also surfaces via the legacy custom-provider view, so a bare
+            # model name is ambiguous — pin the provider explicitly. Before
+            # setup has run there IS no provider entry: point at Quick setup
+            # instead of letting the switch fail with "unknown provider".
             parts = cmd_original.split()
             if (len(parts) == 2 and parts[1] in ("router", "switchyard")
                     and not getattr(self, "_sw_endpoint_root", None)):
-                cmd_original = f"/model {parts[1] if parts[1] != 'switchyard' else 'router'} --provider router"
+                import sw_config
+                try:
+                    connected = sw_config._MARK_BEGIN in sw_config.HERMES_CONFIG.read_text()
+                except Exception:
+                    connected = False
+                if not connected:
+                    print("  ⏚ the router isn't set up yet — /router → Enter on Quick setup (~30s)")
+                    return
+                cmd_original = "/model router --provider router"
         except Exception:
             pass
         if not getattr(self, "_sw_wrapper", False):
