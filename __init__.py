@@ -16,6 +16,7 @@ if str(_DIR) not in sys.path:
 
 import sw_config
 import sw_settings
+import sw_telemetry
 import switchyard_client as swc
 
 _NOT_FOUND_HINT = (
@@ -38,6 +39,7 @@ _HELP = """\
 /router use <route>    switch this session to a route (also: /model <route>)
 /router footer [m]     toggle footer style (row → bar → min → off), or set one
 /router usage          usage & routing decisions   (alias: /nvusage)
+/router telemetry      NeMo Relay telemetry: status, on, off  (also /telemetry)
 /router reset          reset the router's stats
 /router status         PASS/FAIL health checklist
 /router bin <path>     remember where the router executable lives
@@ -323,6 +325,8 @@ def register(ctx):
             return _status_report()
         if cmd == "usage":
             return _usage()
+        if cmd == "telemetry":
+            return _handle_telemetry(rest)
         if cmd == "reset":
             return _reset()
         if cmd == "routes":
@@ -351,6 +355,20 @@ def register(ctx):
         if cmd == "bin":
             return _bin(rest)
         return f"unknown subcommand {cmd!r}\n{_HELP}"
+
+    def _handle_telemetry(raw_args=""):
+        arg = (raw_args or "").strip().lower()
+        if arg in ("on", "off"):
+            enabled = sw_telemetry.plugin_enabled()
+            if (arg == "on") == enabled:
+                return f"telemetry already {arg}"
+            if arg == "on" and sw_telemetry.state() == "no-lib":
+                return "relay library not installed in the hermes venv — install it first"
+            ok, msg = sw_telemetry.toggle()
+            return msg
+        if arg in ("", "status"):
+            return sw_telemetry.status_report(g, d, b, r)
+        return "usage: /telemetry [status|on|off]"
 
     # ── back-compat aliases ────────────────────────────────────────────────
     def _handle_nvusage(raw_args=""):
@@ -385,6 +403,12 @@ def register(ctx):
         "switchyard",
         _handle_switchyard,
         description="Alias of /router",
+    )
+    ctx.register_command(
+        "telemetry",
+        _handle_telemetry,
+        description="NeMo Relay telemetry: status, on, off (opt-in)",
+        args_hint="[status|on|off]",
     )
     ctx.register_command(
         "nvusage",

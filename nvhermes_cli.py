@@ -413,7 +413,7 @@ def _sw_register_picker_search(self, kb):
 # ↑/↓ move, Enter activates, ←/→ cycle the footer style, Esc closes.
 # Strong/weak rows open the searchable model picker for just that tier.
 
-_MENU_ITEMS = ("setup", "footer", "router", "provider", "strong", "weak", "save", "preflight", "route", "close")
+_MENU_ITEMS = ("setup", "footer", "router", "provider", "strong", "weak", "save", "preflight", "telemetry", "route", "close")
 
 
 def _sw_open_menu(self):
@@ -431,6 +431,20 @@ def _sw_close_menu(self):
         self._invalidate(min_interval=0.0)
     except Exception:
         pass
+
+
+def _telemetry_row():
+    import sw_telemetry
+    st = sw_telemetry.state()
+    if st == "no-lib":
+        return ("telemetry", "Telemetry", "— relay lib not installed", "opt-in · needs nemo-relay in the venv")
+    if st == "off":
+        return ("telemetry", "Telemetry", "○ off", "Enter opts in (restart applies)")
+    if st == "enabled":
+        return ("telemetry", "Telemetry", "◐ enabled", "restart hermes to load it · Enter turns off")
+    stats = sw_telemetry.atof_stats()
+    val = f"● on · {stats[1]} events" if stats else "● on"
+    return ("telemetry", "Telemetry", val, "Enter turns off · /telemetry for detail")
 
 
 def _sw_menu_rows(self):
@@ -478,6 +492,7 @@ def _sw_menu_rows(self):
         ("save", "Save changes", save_val,
          "writes config + key preflight" if n_pending else "pick a tier first"),
         ("preflight", "Key preflight", pf_label, "1-token probe per tier"),
+        _telemetry_row(),
         ("route", "Use router", "route this session" if self.model != _sw_default_route(self) else "▶ current model",
          "Enter → /model router"),
         ("close", "Close", "", "Esc discards unsaved picks"),
@@ -694,6 +709,17 @@ def _sw_menu_activate(self, direction=0):
             return report
 
         _sw_menu_run(self, "saving config + key preflight…", _apply)
+    elif key == "telemetry":
+        import sw_telemetry
+        if sw_telemetry.state() == "no-lib":
+            m["note"] = ("relay library not installed in the hermes venv — install it, "
+                         "then Enter here to opt in")
+            try:
+                self._invalidate(min_interval=0.0)
+            except Exception:
+                pass
+            return
+        _sw_menu_run(self, "toggling telemetry…", lambda: sw_telemetry.toggle()[1])
     elif key == "preflight":
         def _pf():
             ok, report = sw_config.preflight_report(sw_config.preflight())
