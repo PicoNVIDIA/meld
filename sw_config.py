@@ -15,6 +15,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -406,6 +407,29 @@ def restart_router():
     return ok, ("restarted with the saved config — " + msg if ok else msg)
 
 
+def _hermes_python():
+    """The hermes venv's python (pip target for the telemetry library)."""
+    exe = Path(sys.executable) if hasattr(sys, "executable") and sys.executable else None
+    if exe and "hermes" in str(exe):
+        return str(exe)
+    home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    cand = home / "hermes-agent" / "venv" / "bin" / "python3"
+    if cand.exists():
+        return str(cand)
+    hermes_bin = shutil.which("hermes")
+    if hermes_bin:
+        try:
+            for line in Path(hermes_bin).read_text().splitlines():
+                if "exec \"" in line:
+                    target = line.split('"')[1]
+                    py = Path(target).parent / "python3"
+                    if py.exists():
+                        return str(py)
+        except Exception:
+            pass
+    return None
+
+
 def _key_from_hermes_env_file(key_env):
     """Read KEY=value from $HERMES_HOME/.env (hermes's own env file).
 
@@ -554,6 +578,32 @@ def setup(progress=None):
         log("  /router bin <path>  (or export SWITCHYARD_BIN)")
         return False, lines
     log(f"✓ router binary: {bin_path}")
+
+    # Telemetry library (NeMo Relay) — install so it's ready, but telemetry
+    # itself stays OFF until the user opts in (/telemetry on). Non-fatal.
+    try:
+        import sys as _s
+        _s.path.insert(0, str(Path(__file__).resolve().parent))
+        import sw_telemetry
+        lib_ok, ver = sw_telemetry.relay_lib()
+        if lib_ok:
+            log(f"✓ telemetry library present ({ver}) — off until /telemetry on")
+        else:
+            py = _hermes_python()
+            if py:
+                log("⏳ installing telemetry library (nemo-relay) into the hermes venv…")
+                res = subprocess.run(
+                    [py, "-m", "pip", "install", "--quiet", "nemo-relay>=0.5,<1.0"],
+                    capture_output=True, text=True, timeout=300)
+                lib_ok, ver = sw_telemetry.relay_lib()
+                if lib_ok:
+                    log(f"✓ telemetry library installed ({ver}) — off until /telemetry on")
+                else:
+                    log("○ telemetry library unavailable from the package index — telemetry stays off")
+            else:
+                log("○ hermes venv not found — skipping telemetry library install")
+    except Exception:
+        log("○ telemetry library step skipped")
 
     if CONFIG_PATH.exists():
         opts = load_last_opts()

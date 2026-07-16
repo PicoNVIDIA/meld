@@ -99,7 +99,9 @@ python3 <plugin-dir>/sw_config.py setup
 ```
 
 With defaults, `setup` alone is enough — it writes the default config when
-none exists. If it reports a missing/rejected key or missing switchyard
+none exists, and installs the NeMo Relay telemetry library so it is ready
+(telemetry stays OFF; the user opts in with `/telemetry on` — never enable
+it on their behalf). If it reports a missing/rejected key or missing switchyard
 binary, relay its message verbatim and pause for the user.
 
 **Phase 4 — verify:**

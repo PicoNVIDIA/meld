@@ -26,7 +26,9 @@ hermes                  # → "/router" → Enter on the Quick setup row
 ```
 
 Quick setup does everything (writes the default config, probes your keys,
-starts the router, registers the provider) with live progress in the panel.
+starts the router, registers the provider, readies the NeMo Relay telemetry
+library — telemetry stays off until `/telemetry on`) with live progress in
+the panel.
 Prefer choosing your own tiers first? `/router build` walks you through
 searchable pickers; `start`/`connect` remain as individual steps.
 
