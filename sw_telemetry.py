@@ -33,11 +33,37 @@ def relay_lib():
 
 
 def plugin_enabled():
+    """True only when the plugin is in plugins.enabled and NOT deny-listed.
+
+    Parsed line-by-line — a substring search can't tell `enabled:` from
+    `disabled:` entries, and the deny-list wins.
+    """
     try:
-        text = HERMES_CONFIG.read_text()
+        lines = HERMES_CONFIG.read_text().splitlines()
     except Exception:
         return False
-    return any(k in text for k in _PLUGIN_KEYS)
+    section, bucket = None, None
+    enabled, disabled = set(), set()
+    for line in lines:
+        s = line.strip()
+        if line and not line[0].isspace():
+            section = s[:-1] if s.endswith(":") else None
+            bucket = None
+            continue
+        if section != "plugins" or not s:
+            continue
+        if s.startswith(("enabled:", "disabled:")):
+            bucket = "enabled" if s.startswith("enabled:") else "disabled"
+            inline = s.split(":", 1)[1].strip()
+            if inline.startswith("["):
+                names = {n.strip() for n in inline.strip("[]").split(",") if n.strip()}
+                (enabled if bucket == "enabled" else disabled).update(names)
+            continue
+        if s.startswith("- ") and bucket:
+            (enabled if bucket == "enabled" else disabled).add(s[2:].strip())
+    if any(k in disabled for k in _PLUGIN_KEYS):
+        return False
+    return any(k in enabled for k in _PLUGIN_KEYS)
 
 
 def runtime():
