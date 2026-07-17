@@ -52,12 +52,14 @@ def runtime():
 
 def atof_file():
     """Path to the configured ATOF export file, or None."""
-    if os.environ.get("HERMES_NEMO_RELAY_ATOF_ENABLED", "").lower() not in ("1", "true", "yes", "on"):
-        return None
-    directory = os.environ.get("HERMES_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY", "").strip()
-    if not directory:
-        return None
-    return Path(directory) / (os.environ.get("HERMES_NEMO_RELAY_ATOF_FILENAME", "").strip() or "hermes-atof.jsonl")
+    if os.environ.get("HERMES_NEMO_RELAY_ATOF_ENABLED", "").lower() in ("1", "true", "yes", "on"):
+        directory = os.environ.get("HERMES_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY", "").strip()
+        if directory:
+            return Path(directory) / (os.environ.get("HERMES_NEMO_RELAY_ATOF_FILENAME", "").strip() or "hermes-atof.jsonl")
+    cfg = _load_meld_settings().get("telemetry") or {}
+    if cfg.get("export"):
+        return Path(cfg.get("dir") or DEFAULT_EXPORT_DIR) / "hermes-atof.jsonl"
+    return None
 
 
 def atof_stats():
@@ -83,8 +85,54 @@ def state():
     return "on" if runtime() is not None else "enabled"
 
 
+DEFAULT_EXPORT_DIR = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "telemetry"
+
+
+def _settings_path():
+    return Path(__file__).resolve().parent / "settings.json"
+
+
+def _load_meld_settings():
+    import json
+    try:
+        data = json.loads(_settings_path().read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_meld_setting(key, value):
+    import json
+    data = _load_meld_settings()
+    data[key] = value
+    try:
+        _settings_path().write_text(json.dumps(data, indent=2))
+    except Exception:
+        pass
+
+
+def apply_env_from_settings():
+    """Inject HERMES_NEMO_RELAY_* env from meld settings at plugin load.
+
+    Hermes doesn't propagate unknown .env keys, and the relay plugin reads
+    os.environ lazily on its first hook — which fires after plugin
+    registration, so setting the env here is guaranteed early enough.
+    Existing environment always wins (setdefault only).
+    """
+    cfg = _load_meld_settings().get("telemetry") or {}
+    if not cfg.get("export"):
+        return False
+    directory = str(cfg.get("dir") or DEFAULT_EXPORT_DIR)
+    Path(directory).mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("HERMES_NEMO_RELAY_ATOF_ENABLED", "true")
+    os.environ.setdefault("HERMES_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY", directory)
+    os.environ.setdefault("HERMES_NEMO_RELAY_ATIF_ENABLED", "true")
+    os.environ.setdefault("HERMES_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY", directory)
+    return True
+
+
 def toggle():
-    """Enable/disable the bundled plugin via the hermes CLI. Returns (ok, msg)."""
+    """Opt in/out: plugin enablement + export config. Returns (ok, msg)."""
     hermes_bin = shutil.which("hermes")
     if not hermes_bin:
         return False, "hermes not on PATH"
@@ -95,8 +143,43 @@ def toggle():
                              capture_output=True, text=True, timeout=60)
         last = (res.stdout or res.stderr).strip()
         if (action == "enable") == plugin_enabled():
-            return True, f"telemetry {action}d — restart hermes to apply"
+            if action == "enable":
+                _save_meld_setting("telemetry", {"export": True, "dir": str(DEFAULT_EXPORT_DIR)})
+                return True, (f"telemetry enabled — restart hermes to apply; "
+                              f"exports (ATOF events + per-session ATIF trajectories) → {DEFAULT_EXPORT_DIR}")
+            _save_meld_setting("telemetry", {"export": False})
+            return True, "telemetry disabled — restart hermes to apply"
     return False, f"could not {action} the nemo_relay plugin: {last[:160]}"
+
+
+def sessions_report(color_green="", color_dim="", color_bold="", color_reset=""):
+    """Tracked live sessions + exported ATIF trajectory files."""
+    g, d, b, r = color_green, color_dim, color_bold, color_reset
+    lines = [f"{g}{b}── telemetry sessions ──{r}"]
+    rt = runtime()
+    if rt is not None:
+        try:
+            live = list(rt.sessions.keys())
+            lines.append(f"  live (hooked this session): {b}{len(live)}{r}"
+                         + (f"  {d}{', '.join(s[:12] for s in live[:4])}{r}" if live else ""))
+        except Exception:
+            pass
+    cfg = _load_meld_settings().get("telemetry") or {}
+    directory = Path(cfg.get("dir") or DEFAULT_EXPORT_DIR)
+    trajs = sorted(directory.glob("hermes-atif-*.json"),
+                   key=lambda p: p.stat().st_mtime, reverse=True) if directory.exists() else []
+    if trajs:
+        lines.append(f"  exported trajectories ({len(trajs)}):")
+        import time as _t
+        for p in trajs[:8]:
+            when = _t.strftime("%m-%d %H:%M", _t.localtime(p.stat().st_mtime))
+            lines.append(f"    {d}·{r} {p.name}  {d}{p.stat().st_size // 1024}KB · {when}{r}")
+    else:
+        lines.append(f"  {d}no exported trajectories yet ({directory}){r}")
+    st = atof_stats()
+    if st:
+        lines.append(f"  event stream: {b}{st[1]}{r} events {d}→ {st[0]}{r}")
+    return "\n".join(lines)
 
 
 def status_report(color_green="", color_dim="", color_bold="", color_reset=""):

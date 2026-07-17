@@ -57,6 +57,15 @@ def register(ctx):
     except Exception:
         pass
 
+    # Telemetry env: when the user has opted in, inject the relay export
+    # config before the nemo_relay plugin's lazy runtime reads os.environ
+    # (its first hook fires after plugin registration, so this is early
+    # enough). No-op unless /telemetry on was chosen.
+    try:
+        sw_telemetry.apply_env_from_settings()
+    except Exception:
+        pass
+
     def _cli_ref():
         try:
             return ctx._manager._cli_ref
@@ -366,9 +375,11 @@ def register(ctx):
                 return "relay library not installed in the hermes venv — install it first"
             ok, msg = sw_telemetry.toggle()
             return msg
+        if arg == "sessions":
+            return sw_telemetry.sessions_report(g, d, b, r)
         if arg in ("", "status"):
             return sw_telemetry.status_report(g, d, b, r)
-        return "usage: /telemetry [status|on|off]"
+        return "usage: /telemetry [status|sessions|on|off]"
 
     # ── back-compat aliases ────────────────────────────────────────────────
     def _handle_nvusage(raw_args=""):
@@ -407,8 +418,8 @@ def register(ctx):
     ctx.register_command(
         "telemetry",
         _handle_telemetry,
-        description="NeMo Relay telemetry: status, on, off (opt-in)",
-        args_hint="[status|on|off]",
+        description="NeMo Relay telemetry: status, sessions, on, off (opt-in)",
+        args_hint="[status|sessions|on|off]",
     )
     ctx.register_command(
         "nvusage",
