@@ -457,7 +457,7 @@ def _telemetry_row():
     if st == "off":
         return ("telemetry", "Telemetry", "○ off", "Enter opts in (restart applies)")
     if st == "enabled":
-        return ("telemetry", "Telemetry", "◐ enabled", "restart hermes to load it · Enter turns off")
+        return ("telemetry", "Telemetry", "◐ enabled", "activates on first message · Enter turns off")
     stats = sw_telemetry.atof_stats()
     val = f"● on · {stats[1]} events" if stats else "● on"
     return ("telemetry", "Telemetry", val, "Enter turns off · /telemetry for detail")

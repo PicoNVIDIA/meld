@@ -265,7 +265,7 @@ def toggle():
         if (action == "enable") == plugin_enabled():
             if action == "enable":
                 _save_meld_setting("telemetry", {"export": True, "dir": str(DEFAULT_EXPORT_DIR)})
-                return True, (f"telemetry enabled — restart hermes to apply; "
+                return True, (f"telemetry enabled — active from the next session's first message; "
                               f"exports (ATOF events + per-session ATIF trajectories) → {DEFAULT_EXPORT_DIR}")
             _save_meld_setting("telemetry", {"export": False})
             return True, "telemetry disabled — restart hermes to apply"
@@ -309,7 +309,7 @@ def status_report(color_green="", color_dim="", color_bold="", color_reset=""):
     lines = [f"{g}{b}── telemetry (NeMo Relay) ──{r}"]
     lines.append(f"  relay library   {'✓ ' + version if lib else '✗ not installed in the hermes venv'}")
     lines.append(f"  plugin          {'✓ enabled' if plugin_enabled() else '○ off (opt-in)'}"
-                 + ("" if st != "enabled" else f"  {d}— restart hermes to load it{r}"))
+                 + ("" if st != "enabled" else f"  {d}— activates on this session's first message{r}"))
     rt = runtime()
     if rt is not None:
         try:
