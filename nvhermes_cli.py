@@ -487,7 +487,10 @@ def _sw_menu_rows(self):
     setup_val = "✓ configured" if (configured and running and connected) else (
         "▶ press Enter — one-shot" if not configured else "▶ finish setup — Enter")
     stale = bool(state and state.get("stale"))
-    if running and stale:
+    healthy = running and sw_config.is_healthy(port)
+    if running and not healthy:
+        router_val, router_hint = f"◌ starting… :{port}", "binding (~15s catalog fetch) — wait before chatting"
+    elif running and stale:
         router_val, router_hint = f"● running :{port} — config changed", "Enter restarts to apply it"
     elif running:
         router_val, router_hint = f"● running :{port}", "Enter stops it"

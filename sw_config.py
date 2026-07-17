@@ -437,8 +437,33 @@ def router_state():
     return state
 
 
+def wait_healthy(port, timeout=75):
+    """Block until the router on *port* serves /health, or timeout. Returns bool."""
+    import urllib.request as _rq
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            _rq.urlopen(f"http://127.0.0.1:{port}/health", timeout=1)
+            return True
+        except Exception:
+            time.sleep(1.5)
+    return False
+
+
+def is_healthy(port, timeout=0.5):
+    import urllib.request as _rq
+    try:
+        _rq.urlopen(f"http://127.0.0.1:{port}/health", timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 def restart_router():
-    """Stop the managed router, wait, start it on the current config.
+    """Stop the managed router, start it on the current config, and WAIT for
+    it to serve /health — callers must never report success while the new
+    process is still binding (~15s catalog fetch), or requests sent into
+    that window fail with connection errors.
 
     Returns (ok, message)."""
     state = router_state()
@@ -456,7 +481,12 @@ def restart_router():
     port = (state or {}).get("port") or opts.get("port", DEFAULTS["port"])
     keys = config_key_envs(CONFIG_PATH)
     ok, msg = start_router(bin_path, CONFIG_PATH, port, keys[0] if keys else "")
-    return ok, ("restarted with the saved config — " + msg if ok else msg)
+    if not ok:
+        return False, msg
+    if wait_healthy(port):
+        return True, f"restarted with the saved config — healthy on :{port}, safe to chat"
+    return False, (f"restarted but not healthy after 75s — check /router logs "
+                   f"(the new config may not start cleanly)")
 
 
 def _hermes_python():
@@ -696,15 +726,7 @@ def setup(progress=None):
             return False, lines
         port = str(opts.get("port", DEFAULTS["port"]))
         log("⏳ router starting (~15s — it fetches the upstream catalog first)")
-        import urllib.request as _rq
-        deadline = time.time() + 75
-        while time.time() < deadline:
-            try:
-                _rq.urlopen(f"http://127.0.0.1:{port}/health", timeout=1)
-                break
-            except Exception:
-                time.sleep(2)
-        else:
+        if not wait_healthy(port):
             log(f"✗ router not healthy after 75s — see {LOG_PATH}")
             return False, lines
         log(f"✓ router healthy on http://127.0.0.1:{port}")
