@@ -1,6 +1,6 @@
 """NeMo Switchyard integration for Hermes Agent.
 
-Registers the /router command hub (/switchyard, /nvusage, /nvfooter aliases)
+Registers the /router command hub (/switchyard alias) and /telemetry,
 and bundles the nemo-switchyard skill. The TUI footer itself lives in
 nvhermes_cli.py and is grafted onto HermesCLI at load, so the stock `hermes`
 command renders it (dormant unless the session routes through Switchyard).
@@ -38,7 +38,7 @@ _HELP = """\
 /router routes         list the configured routes
 /router use <route>    switch this session to a route (also: /model <route>)
 /router footer [m]     toggle footer style (row → bar → min → off), or set one
-/router usage          usage & routing decisions   (alias: /nvusage)
+/router usage          usage & routing decisions
 /router telemetry      NeMo Relay telemetry: status, on, off  (also /telemetry)
 /router reset          reset the router's stats
 /router status         PASS/FAIL health checklist
@@ -399,46 +399,6 @@ def register(ctx):
             return sw_telemetry.status_report(g, d, b, r)
         return "usage: /telemetry [status|sessions|view <n>|on|off]"
 
-    # ── back-compat aliases ────────────────────────────────────────────────
-    def _handle_nvusage(raw_args=""):
-        args = (raw_args or "").strip().lower()
-        if args == "status":
-            return _status_report()
-        if args == "reset":
-            return _reset()
-        if args:
-            return "usage: /nvusage [status|reset]"
-        return _usage()
-
-    def _handle_nvfooter(raw_args=""):
-        mode = (raw_args or "").strip().lower()
-        return _footer("status" if mode == "" else mode)
-
-    # Tab/typing completion for our subcommands — same dropdown the built-in
-    # commands get. SUBCOMMANDS is a live module-level dict the completer
-    # reads per keystroke, so extending it at load is all it takes.
-    try:
-        from hermes_cli.commands import SUBCOMMANDS
-        _router_subs = ["build", "init", "start", "stop", "restart", "connect",
-                        "disconnect", "routes", "use", "footer", "usage", "reset",
-                        "status", "logs", "preset", "telemetry", "bin", "panel",
-                        "uninstall"]
-        SUBCOMMANDS["/router"] = _router_subs
-        SUBCOMMANDS["/switchyard"] = _router_subs
-        SUBCOMMANDS["/telemetry"] = ["status", "sessions", "view", "on", "off"]
-        SUBCOMMANDS["/nvfooter"] = ["row", "bar", "min", "off", "status"]
-        SUBCOMMANDS["/nvusage"] = ["status", "reset"]
-    except Exception:
-        pass
-
-    # One-time first-run hint: fresh install, nothing configured yet.
-    try:
-        if not sw_config.CONFIG_PATH.exists() and not _load_settings().get("first_run_hint_shown"):
-            _save_setting("first_run_hint_shown", True)
-            print("⏚ router plugin installed — type /router and press Enter on Quick setup (~30s)")
-    except Exception:
-        pass
-
     ctx.register_command(
         "router",
         _handle_switchyard,
@@ -455,16 +415,6 @@ def register(ctx):
         _handle_telemetry,
         description="NeMo Relay telemetry: status, sessions, on, off (opt-in)",
         args_hint="[status|sessions|on|off]",
-    )
-    ctx.register_command(
-        "nvusage",
-        _handle_nvusage,
-        description="Router usage & routing stats (alias of /router usage)",
-    )
-    ctx.register_command(
-        "nvfooter",
-        _handle_nvfooter,
-        description="Router footer style: row|bar|min|off (alias of /router footer)",
     )
     try:
         ctx.register_skill(

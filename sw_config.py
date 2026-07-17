@@ -376,10 +376,12 @@ def find_switchyard_bin(settings=None):
             settings = json.loads((Path(__file__).resolve().parent / "settings.json").read_text())
         except Exception:
             settings = {}
+    home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
     for cand in (
         (settings or {}).get("switchyard_bin"),
         os.environ.get("SWITCHYARD_BIN"),
         shutil.which("switchyard"),
+        str(home / "hermes-agent" / "venv" / "bin" / "switchyard"),
     ):
         if cand and Path(cand).exists():
             return str(cand)
@@ -625,8 +627,17 @@ def setup(progress=None):
 
     bin_path = find_switchyard_bin()
     if not bin_path:
-        log("✗ router executable not found — install it, then set it once:")
-        log("  /router bin <path>  (or export SWITCHYARD_BIN)")
+        py = _hermes_python()
+        if py:
+            log("⏳ installing the router package (nemo-switchyard[server]) into the hermes venv…")
+            subprocess.run([py, "-m", "pip", "install", "--quiet", "nemo-switchyard[server]"],
+                           capture_output=True, text=True, timeout=600)
+            bin_path = find_switchyard_bin()
+    if not bin_path:
+        log("✗ router not installed and auto-install failed (Linux has prebuilt wheels;")
+        log("  macOS may need a source build). Install it, then point me at it:")
+        log("  pip install 'nemo-switchyard[server]'   → then run setup again")
+        log("  or /router bin <path-to-switchyard>  (or export SWITCHYARD_BIN)")
         return False, lines
     log(f"✓ router binary: {bin_path}")
 

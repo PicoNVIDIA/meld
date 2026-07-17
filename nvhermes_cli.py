@@ -1,20 +1,16 @@
-"""Switchyard footer for Hermes — grafted onto HermesCLI at plugin load.
+"""Router TUI for Hermes — grafted onto HermesCLI at plugin load.
 
 The plugin calls graft() when Hermes loads it (same process), wrapping a few
 HermesCLI methods on the CLASS so the stock `hermes` command gets the footer,
-green model name, /usage section, and /model route quick-switch — no separate
-launcher needed. Every wrapper falls back to stock behavior on any exception,
-and everything stays dormant unless the session's endpoint fingerprints as a
-Switchyard router.
+green model name, /usage section, the /router panel, and /model integration.
+Every wrapper falls back to stock behavior on any exception, and everything
+stays dormant unless the selected /model is a route on a detected router.
 
 State is initialized lazily on first render (_sw_ensure_init): detection and
 stats polling run in a daemon thread, never on the render path.
 
-A SwitchyardCLI subclass is kept for the legacy `nvhermes` wrapper; grafted
-wrappers no-op for it (the subclass methods already do the work).
-
-Footer styles (persisted via sw_settings, switched live with /switchyard
-footer): row (default) · bar · min · off.
+Footer styles (persisted via sw_settings, cycled with /router footer):
+row (default) · bar · min · off.
 """
 from __future__ import annotations
 
@@ -1093,9 +1089,8 @@ def _sw_builder_abort(self, b=None, reason="cancelled"):
 def graft():
     """Wrap HermesCLI methods in place so stock `hermes` gets the footer.
 
-    Idempotent. Wrappers no-op for SwitchyardCLI instances (legacy nvhermes
-    wrapper — its own overrides already apply) and fall back to the original
-    method on any exception.
+    Idempotent; every wrapper falls back to the original method on any
+    exception, so a Hermes upgrade degrades gracefully instead of crashing.
     """
     import cli as hermes_cli_mod
 
@@ -1113,8 +1108,6 @@ def graft():
 
     def patched_frags(self):
         frags = orig_frags(self)
-        if getattr(self, "_sw_wrapper", False):
-            return frags
         try:
             _sw_ensure_init(self)
             if not self._sw_active or not frags:
@@ -1125,8 +1118,6 @@ def graft():
 
     def patched_widgets(self):
         widgets = list(orig_widgets(self))
-        if getattr(self, "_sw_wrapper", False):
-            return widgets
         try:
             _sw_ensure_init(self)
             # panel first so the ⏚ row stays glued to the status bar below it
@@ -1139,8 +1130,6 @@ def graft():
 
     def patched_styles(self):
         styles = orig_styles(self)
-        if getattr(self, "_sw_wrapper", False):
-            return styles
         try:
             return _sw_add_styles(styles)
         except Exception:
@@ -1148,8 +1137,6 @@ def graft():
 
     def patched_usage(self):
         orig_usage(self)
-        if getattr(self, "_sw_wrapper", False):
-            return
         try:
             _sw_ensure_init(self)
             _sw_usage_section(self)
@@ -1178,12 +1165,11 @@ def graft():
                 cmd_original = "/model router --provider router"
         except Exception:
             pass
-        if not getattr(self, "_sw_wrapper", False):
-            try:
-                if _sw_model_switch_preamble(self, cmd_original):
-                    return
-            except Exception:
-                pass
+        try:
+            if _sw_model_switch_preamble(self, cmd_original):
+                return
+        except Exception:
+            pass
         return orig_model(self, cmd_original)
 
     def patched_pick(self, persist_global=False):
@@ -1250,56 +1236,3 @@ def graft():
     base._sw_open_menu = _sw_open_menu
     base._sw_grafted = True
     return True
-
-
-# ── legacy wrapper subclass (nvhermes) ──────────────────────────────────────
-
-try:
-    from cli import HermesCLI as _HermesCLI
-except Exception:  # pragma: no cover — module usable without hermes on path
-    _HermesCLI = object
-
-
-class SwitchyardCLI(_HermesCLI):
-    _sw_wrapper = True
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        _sw_ensure_init(self)
-
-    def _build_tui_style_dict(self):
-        return _sw_add_styles(super()._build_tui_style_dict())
-
-    def _get_status_bar_fragments(self):
-        frags = super()._get_status_bar_fragments()
-        if not getattr(self, "_sw_active", False) or not frags:
-            return frags
-        try:
-            return _sw_transform_fragments(self, list(frags))
-        except Exception:
-            return frags
-
-    def _get_extra_tui_widgets(self):
-        widgets = list(super()._get_extra_tui_widgets())
-        try:
-            widgets.append(_sw_menu_widget(self))
-            widgets.append(_sw_hint_widget(self))
-            widgets.append(_sw_extra_row_widget(self))
-        except Exception:
-            pass
-        return widgets
-
-    def _sw_switch_route(self, route):
-        return _sw_switch_route(self, route)
-
-    def _handle_model_switch(self, cmd_original):
-        try:
-            if _sw_model_switch_preamble(self, cmd_original):
-                return
-        except Exception:
-            pass
-        return super()._handle_model_switch(cmd_original)
-
-    def _show_usage(self):
-        super()._show_usage()
-        _sw_usage_section(self)

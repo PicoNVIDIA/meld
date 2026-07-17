@@ -1,7 +1,7 @@
 ---
 name: nemo-switchyard
 description: "Set up and use the model-router integration for Hermes Agent: one-Enter Quick setup, live routing footer, /router panel, /telemetry (opt-in NeMo Relay exports)."
-version: 0.8.0
+version: 0.9.0
 author: PicoNVIDIA
 license: MIT
 platforms: [linux, macos]
@@ -58,10 +58,8 @@ keys stay in environment variables.
    `hermes plugins enable nemo-switchyard` (Hermes's own enable command —
    do not hand-edit configuration files).
 
-2. That's it — the plugin grafts the footer into the stock `hermes` command
-   when it loads. (An optional isolated wrapper exists: copy
-   `<plugin-dir>/nvhermes.launcher` to `~/.local/bin/nvhermes` + `chmod +x`.
-   Only offer it if the user asks for a separate command.)
+2. That's it — the plugin grafts the whole UI into the stock `hermes`
+   command when it loads. No launcher, no wrapper, no extra binaries.
 
 **Phase 2 — interview the user.** Ask these (offer the defaults so "just
 use defaults" is a valid answer):
@@ -165,7 +163,7 @@ enough — Hermes keeps its configured provider and traffic bypasses the
 router. While the session's endpoint fingerprints as Switchyard, the model
 name in the status bar renders NVIDIA green and the footer is live.
 
-**Footer styles** (`/nvfooter <mode>`, persisted across sessions;
+**Footer styles** (`/router footer [mode]`, persisted across sessions;
 `SWITCHYARD_FOOTER` env overrides):
 
 ```
@@ -204,8 +202,7 @@ switchyard section under `nvhermes`.
   (`/router status` shows the fingerprint check) — use the
   `OPENROUTER_BASE_URL` + `--provider openrouter` launch shown above.
   `SWITCHYARD_URL` enables inspection only, not routing.
-- **Footer missing?** The session must actually route through Switchyard
-  (`/router status`), the plugin must be enabled, and
-  `/router footer` should not say `off`.
+- **Footer missing?** The selected `/model` must be a router route
+  (`/router status` shows why), and `/router footer` should not say `off`.
 - **Port conflicts:** pick a free port for test routers; check with
   `lsof -nP -iTCP:<port> -sTCP:LISTEN`.

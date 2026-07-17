@@ -17,7 +17,7 @@ info() { printf 'INFO  %s\n' "$1"; }
 if command -v hermes >/dev/null 2>&1; then pass "hermes on PATH"; else failf "hermes on PATH"; fi
 
 plugin_dir=""
-for cand in "$HERMES_HOME"/plugins/*/nvhermes_main.py; do
+for cand in "$HERMES_HOME"/plugins/*/sw_config.py; do
   if [ -f "$cand" ]; then plugin_dir="$(dirname "$cand")"; break; fi
 done
 if [ -n "$plugin_dir" ]; then
@@ -30,12 +30,6 @@ if hermes plugins list 2>/dev/null | grep -a "nemo-switchyard" | grep -v "not en
   pass "plugin enabled"
 else
   failf "plugin enabled (hermes plugins enable nemo-switchyard — note: a plugins.disabled deny-list entry wins)"
-fi
-
-if command -v nvhermes >/dev/null 2>&1; then
-  pass "nvhermes launcher on PATH (optional)"
-else
-  info "nvhermes launcher not installed — optional; the footer works in plain hermes via the plugin"
 fi
 
 if curl -fsS -m 2 "$URL/health" 2>/dev/null | grep -q '"ok"'; then

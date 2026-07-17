@@ -76,7 +76,7 @@ Any agent that can run shell commands can perform the setup — point it at
 
 ## Footer styles
 
-Switch live with `/nvfooter row|bar|min|off` (persisted; `row` is default):
+Switch live with `/router footer` — no argument cycles the styles (persisted; `row` is default):
 
 ```
 row  ⏚ router │ llm-classifier │ 42 req │ 128.4K tok │ $0.43 │ fast 30 · smart 12 │ → kimi-k2.6
@@ -94,7 +94,7 @@ min  ⚕ llm-classifier │ 17.9K/272K │ [█░░░░░░░░░] 7% �
 | `plugin.yaml`, `__init__.py` | Hermes plugin: `/router` hub + aliases, bundled skill, footer graft |
 | `switchyard_client.py` | stdlib client: fingerprinting, stats/decisions, shared renderer |
 | `sw_config.py` | config builder + router lifecycle (also a shell CLI for agents) |
-| `nvhermes_cli.py`, `nvhermes_main.py`, `nvhermes.launcher` | footer implementation + optional isolated wrapper |
+| `nvhermes_cli.py` | the TUI: footer, panel, pickers, grafted onto HermesCLI at load |
 | `scripts/doctor.sh` | PASS/FAIL install & router checks (exit 0 = healthy) |
 | `nemo-switchyard/SKILL.md` | self-setup skill: agents follow it to install and verify |
 
@@ -106,10 +106,9 @@ hermes plugins update      # pull the latest plugin
 hermes skills update       # pull the latest skill
 ```
 
-Notes: the footer lives in plain `hermes` — the plugin grafts it onto the
-CLI at load and it stays dormant unless the session routes through
-Switchyard (the optional `nvhermes` wrapper remains for isolated installs).
-Router stats are in-memory — they reset with the router. Streaming
+Notes: everything lives in plain `hermes` — the plugin grafts the UI onto
+the CLI at load, and it stays dormant unless your `/model` is a router
+route. Router stats are in-memory — they reset with the router. Streaming
 responses carry no token usage.
 
 # Changelog
@@ -124,3 +123,4 @@ responses carry no token usage.
 - 0.6.0 — first-run in one Enter: Quick setup row in the panel (config → keys → router → provider with live progress), sw_config.py setup one-shot for agents, one-time install hint
 - 0.7.0 — de-brand pass: generic "Router" UI (panel, footer, hint), /router as primary command (/switchyard, /nvusage, /nvfooter aliases), default route/provider renamed to `router`
 - 0.8.0 — audit sweep: render-path and panel I/O caching, deny-list-aware enablement everywhere, classifier follow-up on panel save, Save now applies (preflight-gated restart), parallel+cached builder probes, width-correct panel borders; new: /router uninstall · logs · preset, /telemetry view (ATIF trajectory summary), telemetry event breakdown + /usage telemetry section, doctor telemetry checks
+- 0.9.0 — simplification + fresh-system install: legacy nvhermes wrapper removed (files, subclass, launcher; the graft is the only path), /nvusage and /nvfooter retired, setup auto-installs the router package (nemo-switchyard[server]) into the hermes venv when missing (Linux wheels; macOS gets exact instructions)
