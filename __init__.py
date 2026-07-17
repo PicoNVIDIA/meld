@@ -414,6 +414,23 @@ def register(ctx):
         mode = (raw_args or "").strip().lower()
         return _footer("status" if mode == "" else mode)
 
+    # Tab/typing completion for our subcommands — same dropdown the built-in
+    # commands get. SUBCOMMANDS is a live module-level dict the completer
+    # reads per keystroke, so extending it at load is all it takes.
+    try:
+        from hermes_cli.commands import SUBCOMMANDS
+        _router_subs = ["build", "init", "start", "stop", "restart", "connect",
+                        "disconnect", "routes", "use", "footer", "usage", "reset",
+                        "status", "logs", "preset", "telemetry", "bin", "panel",
+                        "uninstall"]
+        SUBCOMMANDS["/router"] = _router_subs
+        SUBCOMMANDS["/switchyard"] = _router_subs
+        SUBCOMMANDS["/telemetry"] = ["status", "sessions", "view", "on", "off"]
+        SUBCOMMANDS["/nvfooter"] = ["row", "bar", "min", "off", "status"]
+        SUBCOMMANDS["/nvusage"] = ["status", "reset"]
+    except Exception:
+        pass
+
     # One-time first-run hint: fresh install, nothing configured yet.
     try:
         if not sw_config.CONFIG_PATH.exists() and not _load_settings().get("first_run_hint_shown"):
