@@ -416,6 +416,23 @@ def register(ctx):
         description="NeMo Relay telemetry: status, sessions, on, off (opt-in)",
         args_hint="[status|sessions|on|off]",
     )
+
+    # Tab/typing completion for our subcommands — same dropdown the built-in
+    # commands get. SUBCOMMANDS is a live module-level dict the completer
+    # reads per keystroke, but it is only pre-populated from the native
+    # command registry, so plugin commands must extend it at load.
+    try:
+        from hermes_cli.commands import SUBCOMMANDS
+        _router_subs = ["build", "init", "start", "stop", "restart", "connect",
+                        "disconnect", "routes", "use", "footer", "usage", "reset",
+                        "status", "logs", "preset", "telemetry", "bin", "panel",
+                        "uninstall"]
+        SUBCOMMANDS["/router"] = _router_subs
+        SUBCOMMANDS["/switchyard"] = _router_subs
+        SUBCOMMANDS["/telemetry"] = ["status", "sessions", "view", "on", "off"]
+    except Exception:
+        pass
+
     try:
         ctx.register_skill(
             "nemo-switchyard",
