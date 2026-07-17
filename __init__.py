@@ -43,6 +43,10 @@ _HELP = """\
 /router reset          reset the router's stats
 /router status         PASS/FAIL health checklist
 /router bin <path>     remember where the router executable lives
+/router logs [n]       tail the router log
+/router preset …       save/list/apply named tier configs
+/router uninstall      stop + disconnect + remove generated config
+/telemetry             relay telemetry: status · sessions · view <n> · on · off
 init keys: strong= weak= classifier= base_url= key_env= port= profile= strong_format= weak_format= min_confidence="""
 
 
@@ -363,6 +367,18 @@ def register(ctx):
             return (f"{g}{msg}{r}" if ok else msg)
         if cmd == "bin":
             return _bin(rest)
+        if cmd == "logs":
+            return sw_config.tail_log(rest or 20)
+        if cmd == "preset":
+            sub, _, arg2 = rest.partition(" ")
+            if sub == "save":
+                return sw_config.preset_save(arg2)[1]
+            if sub in ("", "list"):
+                return sw_config.preset_list()
+            return sw_config.preset_load(sub)[1]
+        if cmd == "uninstall":
+            ok, out = sw_config.uninstall()
+            return "\n".join(out)
         return f"unknown subcommand {cmd!r}\n{_HELP}"
 
     def _handle_telemetry(raw_args=""):
@@ -375,11 +391,13 @@ def register(ctx):
                 return "relay library not installed in the hermes venv — install it first"
             ok, msg = sw_telemetry.toggle()
             return msg
+        if arg.startswith("view"):
+            return sw_telemetry.view_report(arg[4:].strip(), g, d, b, r)
         if arg == "sessions":
             return sw_telemetry.sessions_report(g, d, b, r)
         if arg in ("", "status"):
             return sw_telemetry.status_report(g, d, b, r)
-        return "usage: /telemetry [status|sessions|on|off]"
+        return "usage: /telemetry [status|sessions|view <n>|on|off]"
 
     # ── back-compat aliases ────────────────────────────────────────────────
     def _handle_nvusage(raw_args=""):

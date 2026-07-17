@@ -237,6 +237,56 @@ def preflight_report(results):
 # ---------------------------------------------------------------------------
 
 HERMES_CONFIG = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "config.yaml"
+
+
+def plugins_buckets(config_path=None):
+    """(enabled, disabled) plugin-name sets from the config's plugins block.
+
+    Substring checks can't tell `enabled:` from `disabled:` entries — and the
+    deny-list wins — so every enablement check must go through this.
+    """
+    path = Path(config_path) if config_path else HERMES_CONFIG
+    try:
+        lines = path.read_text().splitlines()
+    except Exception:
+        return set(), set()
+    section, bucket = None, None
+    enabled, disabled = set(), set()
+    for line in lines:
+        s = line.strip()
+        if line and not line[0].isspace():
+            section = s[:-1] if s.endswith(":") else None
+            bucket = None
+            continue
+        if section != "plugins" or not s:
+            continue
+        if s.startswith(("enabled:", "disabled:")):
+            bucket = "enabled" if s.startswith("enabled:") else "disabled"
+            inline = s.split(":", 1)[1].strip()
+            if inline.startswith("["):
+                names = {n.strip() for n in inline.strip("[]").split(",") if n.strip()}
+                (enabled if bucket == "enabled" else disabled).update(names)
+            continue
+        if s.startswith("- ") and bucket:
+            (enabled if bucket == "enabled" else disabled).add(s[2:].strip())
+    return enabled, disabled
+
+
+def apply_classifier_followup(opts):
+    """When the weak tier leaves the default endpoint and the classifier is
+    still the default, classify with the weak model itself so the config only
+    needs providers the user actually has. Mutates and returns opts."""
+    weak_base = opts.get("weak_base_url") or opts.get("base_url")
+    if opts.get("classifier") == DEFAULTS["classifier"] and weak_base != DEFAULTS["base_url"]:
+        opts.update({
+            "classifier": opts.get("weak", DEFAULTS["weak"]),
+            "classifier_base_url": weak_base,
+            "classifier_key_env": opts.get("weak_key_env") or opts.get("key_env"),
+            "classifier_format": opts.get("weak_format", "openai"),
+        })
+    return opts
+
+
 _MARK_BEGIN = "  # >>> router provider — managed by /router connect >>>"
 _MARK_END = "  # <<< router provider — remove with /router disconnect <<<"
 
@@ -401,9 +451,9 @@ def restart_router():
     if not bin_path:
         return False, "router executable not found — /router bin <path>"
     opts = load_last_opts()
+    port = (state or {}).get("port") or opts.get("port", DEFAULTS["port"])
     keys = config_key_envs(CONFIG_PATH)
-    ok, msg = start_router(bin_path, CONFIG_PATH, opts.get("port", DEFAULTS["port"]),
-                           keys[0] if keys else "")
+    ok, msg = start_router(bin_path, CONFIG_PATH, port, keys[0] if keys else "")
     return ok, ("restarted with the saved config — " + msg if ok else msg)
 
 
@@ -498,7 +548,9 @@ def start_router(bin_path, config_path, port, key_env):
             stdin=subprocess.DEVNULL, start_new_session=True, env=child_env,
         )
     except Exception as exc:
+        log.close()
         return False, f"failed to start router: {exc}"
+    log.close()  # child holds its own copy
     _write_state({"pid": proc.pid, "port": int(port), "config": str(config_path),
                   "started_at": time.time()})
     return True, (f"router starting (pid {proc.pid}) on http://127.0.0.1:{port} — "
@@ -551,16 +603,15 @@ def setup(progress=None):
     # Step 0 — self-heal enablement. Agents sometimes install without
     # --enable, and the installer's interactive prompt can't be answered in
     # a non-TTY shell; an unenabled plugin never loads.
-    try:
-        cfg_text = HERMES_CONFIG.read_text()
-    except Exception:
-        cfg_text = ""
-    if "nemo-switchyard" not in cfg_text:
+    def _meld_enabled():
+        enabled, disabled = plugins_buckets()
+        return "nemo-switchyard" in enabled and "nemo-switchyard" not in disabled
+    if not _meld_enabled():
         hermes_bin = shutil.which("hermes")
         if hermes_bin:
             res = subprocess.run([hermes_bin, "plugins", "enable", "nemo-switchyard"],
                                  capture_output=True, text=True, timeout=60)
-            if "nemo-switchyard" in (HERMES_CONFIG.read_text() if HERMES_CONFIG.exists() else ""):
+            if _meld_enabled():
                 log("✓ plugin enabled (it was installed but not enabled)")
             else:
                 log("✗ plugin is not enabled and auto-enable failed — run: hermes plugins enable nemo-switchyard")
@@ -617,7 +668,8 @@ def setup(progress=None):
     for line in report.splitlines():
         log("  " + line)
     if not ok:
-        log("✗ fix the failing keys above, then run setup again")
+        log("✗ fix the failing keys above, then run setup again — or run /router build")
+        log("  to compose tiers from endpoints you already have keys for")
         return False, lines
 
     state = router_state()
@@ -657,6 +709,74 @@ def setup(progress=None):
 
     log("✓ all set — pick the model `router` (/model router)")
     return True, lines
+
+
+def uninstall():
+    """Reverse the integration: stop router, disconnect provider, remove the
+    generated config/state. Returns (ok, lines). The plugin itself is left
+    for `hermes plugins remove nemo-switchyard` (code shouldn't delete
+    itself mid-session); telemetry exports are the user's data and stay."""
+    lines = []
+    ok_stop, msg = stop_router()
+    lines.append(("✓ " if ok_stop else "· ") + msg)
+    ok_dc, msg = disconnect_provider()
+    lines.append(("✓ " if ok_dc else "· ") + msg)
+    if SW_DIR.exists():
+        shutil.rmtree(SW_DIR, ignore_errors=True)
+        lines.append(f"✓ removed {SW_DIR} (config, state, log)")
+    else:
+        lines.append("· no generated config to remove")
+    lines.append("finish with: hermes plugins remove nemo-switchyard")
+    lines.append(f"telemetry exports (if any) kept — delete manually if desired")
+    return True, lines
+
+
+def preset_save(name):
+    """Save the current build (last_opts) as a named preset."""
+    name = (name or "").strip()
+    if not name:
+        return False, "usage: preset save <name>"
+    data = json.loads(_settings_path().read_text()) if _settings_path().exists() else {}
+    if not isinstance(data, dict):
+        data = {}
+    presets = data.setdefault("presets", {})
+    presets[name] = load_last_opts()
+    _settings_path().write_text(json.dumps(data, indent=2))
+    return True, f"preset '{name}' saved (from the current config)"
+
+
+def preset_load(name):
+    """Write the named preset as the active config. Returns (ok, msg)."""
+    name = (name or "").strip()
+    presets = (json.loads(_settings_path().read_text()).get("presets")
+               if _settings_path().exists() else {}) or {}
+    if name not in presets:
+        avail = ", ".join(sorted(presets)) or "none saved"
+        return False, f"no preset '{name}' — available: {avail}"
+    opts = dict(DEFAULTS)
+    opts.update({k: v for k, v in presets[name].items() if k in KNOWN_KEYS})
+    path = write_config(opts)
+    return True, f"preset '{name}' applied → {path} (restart the router to serve it)"
+
+
+def preset_list():
+    presets = (json.loads(_settings_path().read_text()).get("presets")
+               if _settings_path().exists() else {}) or {}
+    if not presets:
+        return "no presets saved — /router preset save <name> stores the current config"
+    out = []
+    for name, opts in sorted(presets.items()):
+        out.append(f"  {name}: strong={_short(opts.get('strong', '?'))}"
+                   f" · weak={_short(opts.get('weak', '?'))}")
+    return "presets:\n" + "\n".join(out)
+
+
+def tail_log(n=20):
+    try:
+        lines = LOG_PATH.read_text(errors="replace").splitlines()
+    except Exception:
+        return f"no router log at {LOG_PATH}"
+    return "\n".join(lines[-max(1, int(n)):])
 
 
 # ---------------------------------------------------------------------------
@@ -735,14 +855,49 @@ def _cli(argv):
             return 1, f"{url} does not fingerprint as a switchyard router (still booting? ~15s)"
         rts, _default = swc.routes(root)
         ok, msg = connect_provider(root + "/v1", [rt["id"] for rt in rts])
-        return (0 if ok else 1), msg + f"\nprovider switchyard → {root}/v1 (routes: " + ", ".join(rt["id"] for rt in rts) + ")"
+        return (0 if ok else 1), msg + f"\nprovider router → {root}/v1 (routes: " + ", ".join(rt["id"] for rt in rts) + ")"
 
     if cmd == "disconnect":
         ok, msg = disconnect_provider()
         return (0 if ok else 1), msg
 
-    return 1, ("usage: sw_config.py init [k=v ...] | start [bin= config= port=] | stop | "
-               "status | connect [URL] | disconnect")
+    if cmd == "restart":
+        ok, msg = restart_router()
+        return (0 if ok else 1), msg
+
+    if cmd == "uninstall":
+        ok, out = uninstall()
+        return (0 if ok else 1), "\n".join(out)
+
+    if cmd == "logs":
+        return 0, tail_log(rest[0] if rest else 20)
+
+    if cmd == "preset":
+        sub = rest[0] if rest else "list"
+        if sub == "save":
+            ok, msg = preset_save(rest[1] if len(rest) > 1 else "")
+            return (0 if ok else 1), msg
+        if sub == "list":
+            return 0, preset_list()
+        ok, msg = preset_load(sub)
+        return (0 if ok else 1), msg
+
+    if cmd == "telemetry":
+        import sw_telemetry
+        sub = rest[0] if rest else "status"
+        if sub in ("on", "off"):
+            ok, msg = sw_telemetry.toggle()
+            return (0 if ok else 1), msg
+        if sub == "sessions":
+            return 0, sw_telemetry.sessions_report()
+        if sub == "view":
+            return 0, sw_telemetry.view_report(rest[1] if len(rest) > 1 else "")
+        return 0, sw_telemetry.status_report()
+
+    return 1, ("usage: sw_config.py setup | init [k=v ...] | build-see-/router | "
+               "start [bin= config= port=] | stop | restart | status | preflight | "
+               "connect [URL] | disconnect | logs [n] | preset [list|save <name>|<name>] | "
+               "telemetry [status|on|off|sessions|view <n>] | uninstall")
 
 
 if __name__ == "__main__":

@@ -26,10 +26,10 @@ else
   failf "plugin installed under $HERMES_HOME/plugins (hermes plugins install PicoNVIDIA/meld --enable)"
 fi
 
-if grep -q "nemo-switchyard" "$HERMES_HOME/config.yaml" 2>/dev/null; then
-  pass "plugin enabled in config.yaml"
+if hermes plugins list 2>/dev/null | grep -a "nemo-switchyard" | grep -v "not enabled" | grep -q "enabled"; then
+  pass "plugin enabled"
 else
-  failf "plugin enabled in config.yaml (hermes plugins enable nemo-switchyard)"
+  failf "plugin enabled (hermes plugins enable nemo-switchyard — note: a plugins.disabled deny-list entry wins)"
 fi
 
 if command -v nvhermes >/dev/null 2>&1; then
@@ -57,6 +57,19 @@ if curl -fsS -m 2 "$URL/health" 2>/dev/null | grep -q '"ok"'; then
   fi
 else
   info "no router at $URL — router checks skipped (set SWITCHYARD_URL or start one)"
+fi
+
+# telemetry (optional, opt-in)
+HPY="$HERMES_HOME/hermes-agent/venv/bin/python3"
+if [ -x "$HPY" ] && "$HPY" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('nemo_relay') else 1)" 2>/dev/null; then
+  pass "telemetry library present (optional)"
+  if hermes plugins list 2>/dev/null | grep -a "nemo_relay" | grep -v "not enabled" | grep -q "enabled"; then
+    info "telemetry plugin enabled (opt-in) — exports configured via /telemetry"
+  else
+    info "telemetry off (opt-in) — /telemetry on to enable"
+  fi
+else
+  info "telemetry library not installed — optional; setup installs it"
 fi
 
 exit "$fail"

@@ -1,7 +1,7 @@
 ---
 name: nemo-switchyard
-description: "Set up and use the NeMo Switchyard integration for Hermes Agent: install the plugin and nvhermes launcher, then read live routing usage via the footer, /nvusage, and /usage."
-version: 0.7.0
+description: "Set up and use the model-router integration for Hermes Agent: one-Enter Quick setup, live routing footer, /router panel, /telemetry (opt-in NeMo Relay exports)."
+version: 0.8.0
 author: PicoNVIDIA
 license: MIT
 platforms: [linux, macos]
@@ -201,7 +201,7 @@ switchyard section under `nvhermes`.
   profile** on routers that include per-decision telemetry; everything else
   degrades gracefully without it.
 - **No green model name?** The session's endpoint must itself be the router
-  (`/nvusage status` shows the fingerprint check) — use the
+  (`/router status` shows the fingerprint check) — use the
   `OPENROUTER_BASE_URL` + `--provider openrouter` launch shown above.
   `SWITCHYARD_URL` enables inspection only, not routing.
 - **Footer missing?** The session must actually route through Switchyard

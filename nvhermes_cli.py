@@ -32,6 +32,18 @@ import sw_settings
 import switchyard_client as swc
 
 _POLL_SECS = 2.0
+
+
+def _dw(text):
+    """Terminal display width — wide glyphs (CJK, symbols like ⏚⏳●) count 2."""
+    import unicodedata
+    w = 0
+    for ch in str(text):
+        if unicodedata.east_asian_width(ch) in ("W", "F") or ch in "⏚⏳⏲●◐▶":
+            w += 2
+        else:
+            w += 1
+    return w
 _NV_GREEN = "#76B900"
 _NV_GREEN_DIM = "#5a8c00"
 
@@ -94,14 +106,15 @@ def _sw_current_root(self):
 
 
 def _sw_route_ids(self, root):
-    """Configured route ids at *root*, cached ~10s."""
+    """Configured route ids at *root*, cached ~10s (default id cached too)."""
     cached_root, ids, ts = self._sw_routes_cache
     now = time.monotonic()
     if cached_root == root and now - ts < 10.0:
         return ids
-    rts, _default = swc.routes(root)
+    rts, default = swc.routes(root)
     ids = [rt["id"] for rt in rts]
     self._sw_routes_cache = (root, ids, now)
+    self._sw_default_id = default or (ids[0] if ids else None)
     return ids
 
 
@@ -227,18 +240,11 @@ def _sw_inline_segment(self):
 
 
 def _sw_default_route(self):
-    """The primary route id at the current endpoint ('router' by default)."""
-    try:
-        root = getattr(self, "_sw_endpoint_root", None)
-        if root:
-            rts, default = swc.routes(root)
-            if default:
-                return default
-            if rts:
-                return rts[0]["id"]
-    except Exception:
-        pass
-    return "router"
+    """The primary route id at the current endpoint ('router' by default).
+
+    Reads only the cached value the poll loop / route-id cache maintains —
+    this is called from render paths and must never touch the network."""
+    return getattr(self, "_sw_default_id", None) or "router"
 
 
 def _sw_switch_route(self, route):
@@ -309,13 +315,23 @@ def _sw_add_styles(styles):
 
 
 def _sw_usage_section(self):
-    if not getattr(self, "_sw_active", False):
-        return
+    if getattr(self, "_sw_active", False):
+        try:
+            st = swc.stats(self._sw_url)
+            dec = swc.decisions(self._sw_url)
+            print()
+            print(swc.render_usage(self._sw_url, st, dec, heading="router", color=False))
+        except Exception:
+            pass
     try:
-        st = swc.stats(self._sw_url)
-        dec = swc.decisions(self._sw_url)
-        print()
-        print(swc.render_usage(self._sw_url, st, dec, heading="router", color=False))
+        import sw_telemetry
+        if sw_telemetry.state() == "on":
+            stats = sw_telemetry.atof_stats()
+            if stats:
+                bd = sw_telemetry.atof_breakdown()
+                bd_txt = " · ".join(f"{k} {v}" for k, v in bd.most_common(4)) if bd else ""
+                print(f"── telemetry ──  {stats[1]} events ({bd_txt}) → {stats[0]}")
+                print("  /telemetry sessions · /telemetry view <n>")
     except Exception:
         pass
 
@@ -490,7 +506,7 @@ def _sw_menu_rows(self):
         tier_row("strong", "Strong tier"),
         tier_row("weak", "Weak tier"),
         ("save", "Save changes", save_val,
-         "writes config + key preflight" if n_pending else "pick a tier first"),
+         "write · preflight · restart router" if n_pending else "pick a tier first"),
         ("preflight", "Key preflight", pf_label, "1-token probe per tier"),
         _telemetry_row(),
         ("route", "Use router", "route this session" if self.model != _sw_default_route(self) else "▶ current model",
@@ -503,20 +519,28 @@ def _sw_menu_fragments(self):
     m = self._sw_menu
     if not m:
         return []
-    rows = _sw_menu_rows(self)
+    # Rows gather process/file/network state — cache 1s so repaints are free.
+    now = time.monotonic()
+    cache = m.get("_rows_cache")
+    if cache and now - cache[0] < 1.0:
+        rows = cache[1]
+    else:
+        rows = _sw_menu_rows(self)
+        m["_rows_cache"] = (now, rows)
     title = "⏚ Router"
-    label_w = max(len(r[1]) for r in rows)
-    value_w = max(len(r[2]) for r in rows)
-    inner = max(52, max(2 + label_w + 2 + value_w + 2 + len(r[3]) + 3 for r in rows))
+    label_w = max(_dw(r[1]) for r in rows)
+    value_w = max(_dw(r[2]) for r in rows)
+    inner = max(52, max(2 + label_w + 2 + value_w + 2 + _dw(r[3]) + 3 for r in rows))
     lines = [("class:clarify-border", "╭─ "), ("class:status-bar-nv", title),
-             ("class:clarify-border", " " + "─" * max(0, inner - len(title) - 3) + "╮\n")]
+             ("class:clarify-border", " " + "─" * max(0, inner - _dw(title) - 3) + "╮\n")]
 
     def put(style_label, label, value, hint, selected):
         prefix = "❯ " if selected else "  "
-        text = f"{prefix}{label:<{label_w}}  {value:<{value_w}}  "
+        text = (prefix + label + " " * (label_w - _dw(label)) + "  "
+                + value + " " * (value_w - _dw(value)) + "  ")
         lines.append(("class:clarify-border", "│ "))
         lines.append(("class:clarify-selected" if selected else style_label, text))
-        pad = inner - len(text) - len(hint) - 3
+        pad = inner - _dw(text) - _dw(hint) - 3
         lines.append(("class:clarify-hint", hint + " " * max(0, pad)))
         lines.append(("class:clarify-border", " │\n"))
 
@@ -525,13 +549,13 @@ def _sw_menu_fragments(self):
     if m.get("busy"):
         lines.append(("class:clarify-border", "│ "))
         busy = f"  ⏳ {m['busy']}"
-        lines.append(("class:status-bar-nv", busy + " " * max(0, inner - len(busy) - 1)))
+        lines.append(("class:status-bar-nv", busy + " " * max(0, inner - _dw(busy) - 1)))
         lines.append(("class:clarify-border", " │\n"))
     if m.get("note"):
         for note_line in str(m["note"]).splitlines()[-14:]:
             lines.append(("class:clarify-border", "│ "))
             txt = f"  {note_line}"[: inner - 2]
-            lines.append(("class:clarify-hint", txt + " " * max(0, inner - len(txt) - 1)))
+            lines.append(("class:clarify-hint", txt + " " * max(0, inner - _dw(txt) - 1)))
             lines.append(("class:clarify-border", " │\n"))
     lines.append(("class:clarify-border", "╰" + "─" * inner + "╯\n"))
     return lines
@@ -572,7 +596,6 @@ def _sw_menu_run(self, label, fn):
         return
 
     def worker():
-        mm = self._sw_menu
         try:
             note = fn()
             if self._sw_menu is not None:
@@ -696,19 +719,23 @@ def _sw_menu_activate(self, direction=0):
                     f"{tier}_base_url": pick["base_url"],
                     f"{tier}_key_env": pick["key_env"],
                 })
+            sw_config.apply_classifier_followup(opts)
             sw_config.write_config(opts)
             ok, report = sw_config.preflight_report(sw_config.preflight())
             if self._sw_menu is not None:
                 self._sw_menu["pending"] = {}
                 self._sw_menu["preflight"] = "✓ all pass" if ok else "✗ failing — see note"
             state = sw_config.router_state()
-            if state and state.get("running"):
-                report += "\nsaved ✓ — Enter on the Router row restarts it with these changes"
+            if ok and state and state.get("running"):
+                okr, msg = sw_config.restart_router()
+                report += "\nsaved ✓ — " + msg
+            elif state and state.get("running"):
+                report += "\nsaved ✓ — fix keys, then Enter on the Router row to apply"
             else:
                 report += "\nsaved ✓"
             return report
 
-        _sw_menu_run(self, "saving config + key preflight…", _apply)
+        _sw_menu_run(self, "saving + preflight + applying…", _apply)
     elif key == "telemetry":
         import sw_telemetry
         if sw_telemetry.state() == "no-lib":
@@ -832,6 +859,7 @@ def _sw_infer_format(slug, base_url, model):
 
 
 _SW_DEFAULTS_SLUG = "switchyard-default-endpoint"
+_PROBE_CACHE = {}
 
 
 def _sw_key_value(key_env):
@@ -874,6 +902,7 @@ def _sw_builder_providers(self):
                 "authenticated": True,
             })
 
+    to_probe = []
     for row in payload.get("providers") or []:
         slug = row.get("slug") or ""
         if slug in ("router", "switchyard"):
@@ -890,12 +919,31 @@ def _sw_builder_providers(self):
         if not key_value:
             row["name"] = f"{row.get('name', slug)} ⚠ ${key_env} not set"
         elif first_model:
-            code = swc.probe_upstream(
-                base_url, key_value, first_model,
-                _sw_infer_format(slug, base_url, first_model), timeout=8.0)
+            to_probe.append((row, slug, base_url, key_env, key_value, first_model))
+        rows.append(row)
+
+    # Auth-probe in parallel with a 1h cache — sequential 8s probes made the
+    # builder take tens of seconds to open with several providers.
+    if to_probe:
+        import concurrent.futures as _fut
+        now = time.monotonic()
+
+        def probe(item):
+            row, slug, base_url, key_env, key_value, first_model = item
+            ck = (base_url, key_env)
+            hit = _PROBE_CACHE.get(ck)
+            if hit and now - hit[1] < 3600:
+                code = hit[0]
+            else:
+                code = swc.probe_upstream(
+                    base_url, key_value, first_model,
+                    _sw_infer_format(slug, base_url, first_model), timeout=8.0)
+                _PROBE_CACHE[ck] = (code, now)
             if code in (401, 403):
                 row["name"] = f"{row.get('name', slug)} ⚠ key fails here"
-        rows.append(row)
+
+        with _fut.ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(probe, to_probe))
     return rows, skipped, ctx
 
 
@@ -1003,15 +1051,7 @@ def _sw_builder_finish(self):
         "model": opts["weak"], "slug": "kept", "format": opts["weak_format"],
         "key_env": opts.get("weak_key_env") or opts["key_env"],
         "base_url": opts.get("weak_base_url") or opts["base_url"]}
-    if b["opts"].get("classifier") == sw_config.DEFAULTS["classifier"] and \
-            weak["base_url"] != sw_config.DEFAULTS["base_url"]:
-        # Default classifier lives on the NVIDIA endpoint; when the weak tier
-        # comes from elsewhere, classify with the weak model itself so the
-        # config only needs providers the user actually has.
-        opts.update({"classifier": weak["model"],
-                     "classifier_base_url": weak["base_url"],
-                     "classifier_key_env": weak["key_env"],
-                     "classifier_format": weak["format"]})
+    sw_config.apply_classifier_followup(opts)
     path = sw_config.write_config(opts)
     keys = ", ".join(f"${v}" for v in sorted({strong["key_env"], weak["key_env"]}))
     print(f"  ✓ wrote {path}")
@@ -1164,7 +1204,19 @@ def graft():
                         return
             except Exception:
                 self._sw_builder = None
-        return orig_pick(self, persist_global)
+        result = orig_pick(self, persist_global)
+        try:
+            state = self._model_picker_state
+            if state and state.get("stage") == "provider" and state.get("sw_orig_name"):
+                pd = state.get("provider_data")
+                if isinstance(pd, dict):
+                    pd["name"] = state["sw_orig_name"]
+                state.pop("sw_query", None)
+                state.pop("sw_full_list", None)
+                state.pop("sw_orig_name", None)
+        except Exception:
+            pass
+        return result
 
     def patched_close_picker(self):
         b = getattr(self, "_sw_builder", None)

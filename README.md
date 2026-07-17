@@ -66,6 +66,9 @@ a handful in a few keystrokes.
 /router routes|use     list routes / switch this session
 /router footer [m]     cycle or set footer style
 /router usage|status   usage report / PASS-FAIL health checks
+/router logs|preset    tail the router log / named tier configs
+/router uninstall      stop + disconnect + remove generated config
+/telemetry             opt-in NeMo Relay telemetry: status · sessions · view · on/off
 ```
 
 Any agent that can run shell commands can perform the setup — point it at
@@ -98,7 +101,7 @@ min  ⚕ llm-classifier │ 17.9K/272K │ [█░░░░░░░░░] 7% �
 ## Health & updates
 
 ```bash
-scripts/doctor.sh          # or /nvusage status inside a session
+scripts/doctor.sh          # or /router status inside a session
 hermes plugins update      # pull the latest plugin
 hermes skills update       # pull the latest skill
 ```
@@ -120,3 +123,4 @@ responses carry no token usage.
 - 0.5.0 — interactive everything: /router opens an arrow-key panel (footer/router/provider toggles, tier pickers, preflight); type-to-search in model pickers; single-tier edits keep the rest of the config
 - 0.6.0 — first-run in one Enter: Quick setup row in the panel (config → keys → router → provider with live progress), sw_config.py setup one-shot for agents, one-time install hint
 - 0.7.0 — de-brand pass: generic "Router" UI (panel, footer, hint), /router as primary command (/switchyard, /nvusage, /nvfooter aliases), default route/provider renamed to `router`
+- 0.8.0 — audit sweep: render-path and panel I/O caching, deny-list-aware enablement everywhere, classifier follow-up on panel save, Save now applies (preflight-gated restart), parallel+cached builder probes, width-correct panel borders; new: /router uninstall · logs · preset, /telemetry view (ATIF trajectory summary), telemetry event breakdown + /usage telemetry section, doctor telemetry checks

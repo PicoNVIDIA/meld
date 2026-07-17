@@ -11,7 +11,7 @@ import os
 import urllib.error
 import urllib.request
 
-DEFAULT_CANDIDATES = ("http://127.0.0.1:4000", "http://127.0.0.1:4100")
+DEFAULT_CANDIDATES = ("http://127.0.0.1:4100",)
 
 GREEN = "\x1b[38;2;118;185;0m"
 DIM = "\x1b[2m"

@@ -16,51 +16,51 @@ from pathlib import Path
 HERMES_CONFIG = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "config.yaml"
 _PLUGIN_KEYS = ("observability/nemo_relay", "nemo_relay", "nemo-relay")
 
+# Render-path callers hit these dozens of times per second — memoise the
+# expensive probes (dist-info scans, file line counts) with short TTLs.
+_MEMO = {}
+
+
+def _memo(key, ttl, fn):
+    import time
+    now = time.monotonic()
+    hit = _MEMO.get(key)
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    val = fn()
+    _MEMO[key] = (now, val)
+    return val
+
+
+def _memo_clear():
+    _MEMO.clear()
+
 
 def relay_lib():
-    """(available: bool, version: str)."""
-    try:
-        import importlib.util
-        if importlib.util.find_spec("nemo_relay") is None:
-            return False, ""
+    """(available: bool, version: str). Cached — importlib.metadata scans disk."""
+    def probe():
         try:
-            import importlib.metadata
-            return True, importlib.metadata.version("nemo-relay")
+            import importlib.util
+            if importlib.util.find_spec("nemo_relay") is None:
+                return False, ""
+            try:
+                import importlib.metadata
+                return True, importlib.metadata.version("nemo-relay")
+            except Exception:
+                return True, "?"
         except Exception:
-            return True, "?"
-    except Exception:
-        return False, ""
+            return False, ""
+    # a present library never disappears mid-session; absence is re-checked
+    hit = _MEMO.get("relay_lib")
+    if hit and hit[1][0]:
+        return hit[1]
+    return _memo("relay_lib", 15.0, probe)
 
 
 def plugin_enabled():
-    """True only when the plugin is in plugins.enabled and NOT deny-listed.
-
-    Parsed line-by-line — a substring search can't tell `enabled:` from
-    `disabled:` entries, and the deny-list wins.
-    """
-    try:
-        lines = HERMES_CONFIG.read_text().splitlines()
-    except Exception:
-        return False
-    section, bucket = None, None
-    enabled, disabled = set(), set()
-    for line in lines:
-        s = line.strip()
-        if line and not line[0].isspace():
-            section = s[:-1] if s.endswith(":") else None
-            bucket = None
-            continue
-        if section != "plugins" or not s:
-            continue
-        if s.startswith(("enabled:", "disabled:")):
-            bucket = "enabled" if s.startswith("enabled:") else "disabled"
-            inline = s.split(":", 1)[1].strip()
-            if inline.startswith("["):
-                names = {n.strip() for n in inline.strip("[]").split(",") if n.strip()}
-                (enabled if bucket == "enabled" else disabled).update(names)
-            continue
-        if s.startswith("- ") and bucket:
-            (enabled if bucket == "enabled" else disabled).add(s[2:].strip())
+    """True only when the plugin is in plugins.enabled and NOT deny-listed."""
+    import sw_config
+    enabled, disabled = sw_config.plugins_buckets()
     if any(k in disabled for k in _PLUGIN_KEYS):
         return False
     return any(k in enabled for k in _PLUGIN_KEYS)
@@ -89,16 +89,110 @@ def atof_file():
 
 
 def atof_stats():
-    """(path, event_count, mtime) for the ATOF export file, or None."""
-    path = atof_file()
-    if not path or not path.exists():
-        return None
+    """(path, event_count, mtime) for the ATOF export file, or None. Cached 5s."""
+    def compute():
+        path = atof_file()
+        if not path or not path.exists():
+            return None
+        try:
+            with open(path, "rb") as fh:
+                count = sum(1 for _ in fh)
+            return path, count, path.stat().st_mtime
+        except Exception:
+            return None
+    return _memo("atof_stats", 5.0, compute)
+
+
+def atof_breakdown():
+    """Counter of ATOF event categories (llm/tool/agent/mark). Cached 5s."""
+    def compute():
+        import json
+        from collections import Counter
+        path = atof_file()
+        counts = Counter()
+        if not path or not path.exists():
+            return counts
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    try:
+                        e = json.loads(line)
+                    except Exception:
+                        continue
+                    counts[e.get("category") or e.get("kind") or "other"] += 1
+        except Exception:
+            pass
+        return counts
+    return _memo("atof_breakdown", 5.0, compute)
+
+
+def atif_dir():
+    """Trajectory export directory: env override first, then meld settings."""
+    env_dir = os.environ.get("HERMES_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY", "").strip()
+    if env_dir:
+        return Path(env_dir)
+    cfg = _load_meld_settings().get("telemetry") or {}
+    return Path(cfg.get("dir") or DEFAULT_EXPORT_DIR)
+
+
+def trajectories():
+    """Exported ATIF trajectory files, newest first."""
+    directory = atif_dir()
+    if not directory.exists():
+        return []
+    return sorted(directory.glob("hermes-atif-*.json"),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def view_report(selector="", color_green="", color_dim="", color_bold="", color_reset=""):
+    """Summarize one exported ATIF trajectory (ATIF v1.7 shape).
+
+    selector: empty/1 = newest, N = Nth newest, or a session-id substring.
+    """
+    import json
+    from collections import Counter
+    g, d, b, r = color_green, color_dim, color_bold, color_reset
+    trajs = trajectories()
+    if not trajs:
+        return f"no exported trajectories yet ({atif_dir()})"
+    sel = (selector or "").strip()
+    path = None
+    if not sel or sel.isdigit():
+        idx = max(1, int(sel or 1)) - 1
+        if idx >= len(trajs):
+            return f"only {len(trajs)} trajectories — /telemetry view [1..{len(trajs)}]"
+        path = trajs[idx]
+    else:
+        path = next((p for p in trajs if sel in p.name), None)
+        if path is None:
+            return f"no trajectory matching {sel!r} — /telemetry sessions to list them"
     try:
-        with open(path, "rb") as fh:
-            count = sum(1 for _ in fh)
-        return path, count, path.stat().st_mtime
-    except Exception:
-        return None
+        data = json.loads(path.read_text())
+    except Exception as exc:
+        return f"could not parse {path.name}: {exc}"
+    agent = data.get("agent") or {}
+    steps = data.get("steps") or []
+    metrics = data.get("final_metrics") or {}
+    sources = Counter(s.get("source") or "?" for s in steps if isinstance(s, dict))
+    times = [s.get("timestamp") for s in steps if isinstance(s, dict) and s.get("timestamp")]
+    lines = [f"{g}{b}── trajectory {data.get('session_id', path.name)} ──{r}  {d}{path.name}{r}"]
+    lines.append(f"  agent    {agent.get('name', '?')} {d}(model {agent.get('model_name', '?')},"
+                 f" schema {data.get('schema_version', '?')}){r}")
+    if times:
+        lines.append(f"  span     {d}{times[0]}  →  {times[-1]}{r}")
+    src_txt = " · ".join(f"{k} {v}" for k, v in sources.most_common())
+    lines.append(f"  steps    {b}{len(steps)}{r}  {d}({src_txt}){r}")
+    if metrics:
+        lines.append(f"  tokens   prompt {b}{metrics.get('total_prompt_tokens', 0)}{r}"
+                     f" · completion {b}{metrics.get('total_completion_tokens', 0)}{r}"
+                     f" · cached {metrics.get('total_cached_tokens', 0)}")
+    tail = [s for s in steps if isinstance(s, dict)][-4:]
+    if tail:
+        lines.append(f"  {d}last steps:{r}")
+        for s in tail:
+            lines.append(f"    {d}·{r} #{s.get('step_id', '?')} {s.get('source', '?')}"
+                         f"  {d}{str(s.get('message', ''))[:60]}{r}")
+    return "\n".join(lines)
 
 
 def state():
@@ -190,21 +284,21 @@ def sessions_report(color_green="", color_dim="", color_bold="", color_reset="")
                          + (f"  {d}{', '.join(s[:12] for s in live[:4])}{r}" if live else ""))
         except Exception:
             pass
-    cfg = _load_meld_settings().get("telemetry") or {}
-    directory = Path(cfg.get("dir") or DEFAULT_EXPORT_DIR)
-    trajs = sorted(directory.glob("hermes-atif-*.json"),
-                   key=lambda p: p.stat().st_mtime, reverse=True) if directory.exists() else []
+    trajs = trajectories()
     if trajs:
         lines.append(f"  exported trajectories ({len(trajs)}):")
         import time as _t
-        for p in trajs[:8]:
+        for i, p in enumerate(trajs[:8], 1):
             when = _t.strftime("%m-%d %H:%M", _t.localtime(p.stat().st_mtime))
-            lines.append(f"    {d}·{r} {p.name}  {d}{p.stat().st_size // 1024}KB · {when}{r}")
+            lines.append(f"    {d}{i}.{r} {p.name}  {d}{p.stat().st_size // 1024}KB · {when}{r}")
+        lines.append(f"  {d}open one: /telemetry view <n>{r}")
     else:
-        lines.append(f"  {d}no exported trajectories yet ({directory}){r}")
+        lines.append(f"  {d}no exported trajectories yet ({atif_dir()}){r}")
     st = atof_stats()
     if st:
-        lines.append(f"  event stream: {b}{st[1]}{r} events {d}→ {st[0]}{r}")
+        bd = atof_breakdown()
+        bd_txt = " · ".join(f"{k} {v}" for k, v in bd.most_common(4)) if bd else ""
+        lines.append(f"  event stream: {b}{st[1]}{r} events {d}({bd_txt}) → {st[0]}{r}")
     return "\n".join(lines)
 
 
@@ -228,7 +322,9 @@ def status_report(color_green="", color_dim="", color_bold="", color_reset=""):
     st_atof = atof_stats()
     if st_atof:
         path, count, _m = st_atof
-        lines.append(f"  exported        {b}{count}{r} events → {d}{path}{r}")
+        bd = atof_breakdown()
+        bd_txt = f"  {d}({' · '.join(f'{k} {v}' for k, v in bd.most_common(4))}){r}" if bd else ""
+        lines.append(f"  exported        {b}{count}{r} events{bd_txt} → {d}{path}{r}")
     envs = sorted(k for k in os.environ if k.startswith("HERMES_NEMO_RELAY_"))
     if envs:
         lines.append(f"  {d}env config: {', '.join(envs)}{r}")
