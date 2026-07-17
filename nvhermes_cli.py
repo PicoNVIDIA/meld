@@ -461,7 +461,7 @@ def _telemetry_row():
 
 def _sw_menu_rows(self):
     import sw_config
-    opts = sw_config.load_last_opts()
+    opts = sw_config.read_config_opts()
     state = sw_config.router_state()
     running = bool(state and state.get("running"))
     port = (state or {}).get("port") or opts.get("port")
@@ -711,7 +711,7 @@ def _sw_menu_activate(self, direction=0):
             return
 
         def _apply():
-            opts = sw_config.load_last_opts()
+            opts = sw_config.read_config_opts()
             for tier, pick in pending.items():
                 opts.update({
                     tier: pick["model"], f"{tier}_format": pick["format"],
@@ -885,7 +885,7 @@ def _sw_builder_providers(self):
     payload = build_models_payload(ctx, include_unconfigured=False, picker_hints=True)
     rows, skipped = [], []
 
-    opts = sw_config.load_last_opts()
+    opts = sw_config.read_config_opts()
     default_url = opts.get("base_url", "")
     default_key = _sw_key_value(opts.get("key_env", ""))
     if default_url and default_key:
@@ -948,7 +948,7 @@ def _sw_builder_providers(self):
 
 def _sw_start_builder(self, raw_args="", only_tier=None, menu_mode=False):
     import sw_config
-    base_opts = sw_config.load_last_opts() if only_tier else None
+    base_opts = sw_config.read_config_opts() if only_tier else None
     opts, unknown = sw_config.parse_kv(raw_args)
     if base_opts:
         base_opts.update({k: v for k, v in opts.items() if v != sw_config.DEFAULTS.get(k)})

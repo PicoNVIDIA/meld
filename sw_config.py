@@ -167,6 +167,43 @@ def load_last_opts():
     return opts
 
 
+def read_config_opts(path=None):
+    """Opts as the SERVED config defines them: parse routes.yaml back into
+    the opts dict, over load_last_opts() for what the file doesn't carry
+    (port, timeouts, classifier format). The panel, single-tier edits, and
+    preset save must base on this rather than last_opts — a hand edit,
+    preset apply, or restored backup otherwise shows (and a one-tier Save
+    silently rewrites) tiers the router isn't actually serving."""
+    opts = load_last_opts()
+    path = Path(path) if path else CONFIG_PATH
+    try:
+        text = path.read_text()
+    except Exception:
+        return opts
+    m = re.search(r"defaults:\s*\n\s+api_key:\s*\$\{([A-Za-z_][A-Za-z0-9_]*)\}"
+                  r"\s*\n\s+base_url:\s*(\S+)", text)
+    if m:
+        opts["key_env"], opts["base_url"] = m.group(1), m.group(2)
+    for m in re.finditer(
+            r"^\s+(classifier|strong|weak):\s*\n(?:\s+id:\s*\S+\s*\n)?"
+            r"\s+model:\s*(\S+)\s*\n\s+api_key:\s*\$\{([A-Za-z_][A-Za-z0-9_]*)\}"
+            r"\s*\n\s+base_url:\s*(\S+)(?:\s*\n\s+format:\s*(\S+))?",
+            text, re.M):
+        tier, model, key_env, base_url, fmt = m.groups()
+        opts[tier] = model
+        opts[f"{tier}_key_env"] = "" if key_env == opts["key_env"] else key_env
+        opts[f"{tier}_base_url"] = "" if base_url == opts["base_url"] else base_url
+        if fmt and tier != "classifier":
+            opts[f"{tier}_format"] = fmt
+    m = re.search(r"^\s+profile:\s*(\S+)", text, re.M)
+    if m:
+        opts["profile"] = m.group(1)
+    m = re.search(r"min_confidence:\s*(\S+)", text)
+    if m:
+        opts["min_confidence"] = m.group(1)
+    return opts
+
+
 # ---------------------------------------------------------------------------
 # upstream key preflight
 # ---------------------------------------------------------------------------
@@ -765,7 +802,7 @@ def uninstall():
 
 
 def preset_save(name):
-    """Save the current build (last_opts) as a named preset."""
+    """Save the served config (routes.yaml as it stands) as a named preset."""
     name = (name or "").strip()
     if not name:
         return False, "usage: preset save <name>"
@@ -773,7 +810,7 @@ def preset_save(name):
     if not isinstance(data, dict):
         data = {}
     presets = data.setdefault("presets", {})
-    presets[name] = load_last_opts()
+    presets[name] = read_config_opts()
     _settings_path().write_text(json.dumps(data, indent=2))
     return True, f"preset '{name}' saved (from the current config)"
 

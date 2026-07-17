@@ -1,4 +1,4 @@
 name: nemo-switchyard
-version: "0.9.1"
+version: "0.9.2"
 description: NeMo Switchyard integration — live routing footer, /switchyard panel, one-shot setup. Agents — after installing, follow AGENTS.md to finish setup
 author: PicoNVIDIA
